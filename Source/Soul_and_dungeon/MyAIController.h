@@ -1,5 +1,5 @@
 #pragma once
-
+#include "Animation/AnimInstance.h"
 #include "CoreMinimal.h"
 #include "AIController.h"
 #include "MyAIController.generated.h"

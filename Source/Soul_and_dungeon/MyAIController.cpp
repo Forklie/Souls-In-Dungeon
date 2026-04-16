@@ -1,5 +1,7 @@
 #include "MyAIController.h"
 #include "Kismet/GameplayStatics.h"
+#include "GameFramework/Character.h"
+#include "Animation/AnimInstance.h"
 
 AMyAIController::AMyAIController()
 {
@@ -19,14 +21,35 @@ void AMyAIController::Tick(float DeltaTime)
 
     float StopDistance = 150.0f;
 
-    if (Distance > StopDistance)
+    ACharacter* AICharacter = Cast<ACharacter>(AI);
+    if (!AICharacter) return;
+
+    UAnimInstance* AnimInstance = AICharacter->GetMesh()->GetAnimInstance();
+    if (!AnimInstance) return;
+
+    // 🔥 IMPORTANT LINE (THIS CONTROLS ANIMATION)
+    bool bIsAttacking = Distance <= StopDistance;
+
+    // 🟢 Move or Stop
+    if (!bIsAttacking)
     {
-        // 🟢 Follow
         MoveToLocation(Player->GetActorLocation());
     }
     else
     {
-        // 🔴 Stop
         StopMovement();
+    }
+
+    // 🔴 SET VARIABLE IN ANIM BP
+    FName VarName = "IsAttacking";
+    FProperty* Prop = AnimInstance->GetClass()->FindPropertyByName(VarName);
+
+    if (Prop)
+    {
+        FBoolProperty* BoolProp = CastField<FBoolProperty>(Prop);
+        if (BoolProp)
+        {
+            BoolProp->SetPropertyValue_InContainer(AnimInstance, bIsAttacking);
+        }
     }
 }
