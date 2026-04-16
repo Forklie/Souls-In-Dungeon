@@ -11,6 +11,8 @@
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
 #include "Soul_and_dungeon.h"
+#include "Kismet/GameplayStatics.h"
+#include "Blueprint/UserWidget.h"
 
 ASoul_and_dungeonCharacter::ASoul_and_dungeonCharacter()
 {
@@ -132,6 +134,8 @@ void ASoul_and_dungeonCharacter::DoJumpEnd()
 	StopJumping();
 }
 
+
+
 void ASoul_and_dungeonCharacter::TakeDamageSimple(float DamageAmount)
 {
 	Health -= DamageAmount;
@@ -146,11 +150,29 @@ void ASoul_and_dungeonCharacter::TakeDamageSimple(float DamageAmount)
 		);
 	}
 
+	// 💀 PLAYER DEAD
 	if (Health <= 0)
 	{
 		if (GEngine)
 		{
 			GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Red, TEXT("Player Dead"));
+		}
+
+		// 🔄 RESTART LEVEL
+		UGameplayStatics::OpenLevel(this, FName(*GetWorld()->GetName()));
+	}
+}
+
+void ASoul_and_dungeonCharacter::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (UClass* WidgetClass = LoadClass<UUserWidget>(nullptr, TEXT("/Game/ThirdPerson/UI/WBP_HealthBar.WBP_HealthBar_C")))
+	{
+		UUserWidget* Widget = CreateWidget<UUserWidget>(GetWorld(), WidgetClass);
+		if (Widget)
+		{
+			Widget->AddToViewport();
 		}
 	}
 }

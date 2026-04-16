@@ -43,6 +43,8 @@ public:
 
 protected:
 
+	virtual void BeginPlay() override;   // ✅ ADD THIS
+
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
 	void Move(const FInputActionValue& Value);
