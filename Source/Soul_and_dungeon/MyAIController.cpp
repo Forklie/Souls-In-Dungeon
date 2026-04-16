@@ -2,6 +2,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/Character.h"
 #include "Animation/AnimInstance.h"
+#include "Soul_and_dungeonCharacter.h"
 
 AMyAIController::AMyAIController()
 {
@@ -25,30 +26,52 @@ void AMyAIController::Tick(float DeltaTime)
     UAnimInstance* AnimInstance = AICharacter->GetMesh()->GetAnimInstance();
     if (!AnimInstance) return;
 
-    // ✅ SIMPLE ATTACK CONDITION (LOOP)
     bool bIsAttacking = Distance <= StopDistance;
+
+    float CurrentTime = GetWorld()->GetTimeSeconds();
 
     if (bIsAttacking)
     {
         StopMovement();
 
-        // 🔴 SMOOTH ROTATION TOWARD PLAYER
+        // 🔴 FACE PLAYER
         FVector Direction = Player->GetActorLocation() - AI->GetActorLocation();
         FRotator LookRotation = Direction.Rotation();
-
-        // Only rotate Yaw (left/right)
         FRotator TargetRotation(0.0f, LookRotation.Yaw, 0.0f);
 
-        // 🔴 FORCE LOOK AT PLAYER (NO SMOOTH)
         AI->SetActorRotation(TargetRotation);
+
+        // 🧠 START ATTACK TIMER
+        if (LastAttackStartTime == 0.0f)
+        {
+            LastAttackStartTime = CurrentTime;
+        }
+
+        // 💥 APPLY DAMAGE AFTER DELAY
+        if ((CurrentTime - LastAttackStartTime) >= AttackDelay)
+        {
+            if (CurrentTime - LastDamageTime > DamageCooldown)
+            {
+                ASoul_and_dungeonCharacter* PlayerChar = Cast<ASoul_and_dungeonCharacter>(Player);
+
+                if (PlayerChar)
+                {
+                    PlayerChar->TakeDamageSimple(10.0f);
+                }
+
+                LastDamageTime = CurrentTime;
+            }
+        }
     }
     else
     {
-        // 🟢 FOLLOW PLAYER
         MoveToLocation(Player->GetActorLocation());
+
+        // 🔄 RESET ATTACK TIMER
+        LastAttackStartTime = 0.0f;
     }
 
-    // 🔴 SET ANIMATION VARIABLE (IMPORTANT)
+    // 🔴 SET ANIMATION VARIABLE
     FName VarName = "IsAttacking";
     FProperty* Prop = AnimInstance->GetClass()->FindPropertyByName(VarName);
 

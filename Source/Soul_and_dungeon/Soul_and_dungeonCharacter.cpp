@@ -131,3 +131,26 @@ void ASoul_and_dungeonCharacter::DoJumpEnd()
 	// signal the character to stop jumping
 	StopJumping();
 }
+
+void ASoul_and_dungeonCharacter::TakeDamageSimple(float DamageAmount)
+{
+	Health -= DamageAmount;
+
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(
+			-1,
+			2.0f,
+			FColor::Red,
+			FString::Printf(TEXT("Player Hit! Health: %f"), Health)
+		);
+	}
+
+	if (Health <= 0)
+	{
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Red, TEXT("Player Dead"));
+		}
+	}
+}
