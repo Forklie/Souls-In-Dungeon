@@ -19,28 +19,36 @@ void AMyAIController::Tick(float DeltaTime)
 
     float Distance = FVector::Dist(AI->GetActorLocation(), Player->GetActorLocation());
 
-    float StopDistance = 150.0f;
-
     ACharacter* AICharacter = Cast<ACharacter>(AI);
     if (!AICharacter) return;
 
     UAnimInstance* AnimInstance = AICharacter->GetMesh()->GetAnimInstance();
     if (!AnimInstance) return;
 
-    // 🔥 IMPORTANT LINE (THIS CONTROLS ANIMATION)
+    // ✅ SIMPLE ATTACK CONDITION (LOOP)
     bool bIsAttacking = Distance <= StopDistance;
 
-    // 🟢 Move or Stop
-    if (!bIsAttacking)
+    if (bIsAttacking)
     {
-        MoveToLocation(Player->GetActorLocation());
+        StopMovement();
+
+        // 🔴 SMOOTH ROTATION TOWARD PLAYER
+        FVector Direction = Player->GetActorLocation() - AI->GetActorLocation();
+        FRotator LookRotation = Direction.Rotation();
+
+        // Only rotate Yaw (left/right)
+        FRotator TargetRotation(0.0f, LookRotation.Yaw, 0.0f);
+
+        // 🔴 FORCE LOOK AT PLAYER (NO SMOOTH)
+        AI->SetActorRotation(TargetRotation);
     }
     else
     {
-        StopMovement();
+        // 🟢 FOLLOW PLAYER
+        MoveToLocation(Player->GetActorLocation());
     }
 
-    // 🔴 SET VARIABLE IN ANIM BP
+    // 🔴 SET ANIMATION VARIABLE (IMPORTANT)
     FName VarName = "IsAttacking";
     FProperty* Prop = AnimInstance->GetClass()->FindPropertyByName(VarName);
 

@@ -1,5 +1,5 @@
 #pragma once
-#include "Animation/AnimInstance.h"
+
 #include "CoreMinimal.h"
 #include "AIController.h"
 #include "MyAIController.generated.h"
@@ -14,4 +14,11 @@ public:
 
 protected:
     virtual void Tick(float DeltaTime) override;
+
+private:
+    float StopDistance = 150.0f;
+
+    float AttackCooldown = 1.5f;
+    float LastAttackTime = 0.0f;
+    float AttackDuration = 1.0f;
 };
