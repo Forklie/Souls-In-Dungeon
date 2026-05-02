@@ -7,6 +7,7 @@
 #include "CombatAttacker.h"
 #include "CombatDamageable.h"
 #include "Animation/AnimInstance.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "CombatCharacter.generated.h"
 
 class USpringArmComponent;
@@ -15,6 +16,7 @@ class UInputAction;
 struct FInputActionValue;
 class UCombatLifeBar;
 class UWidgetComponent;
+class UAnimSequenceBase;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogCombatCharacter, Log, All);
 
@@ -88,6 +90,34 @@ protected:
 	/** Name of the pelvis bone, for damage ragdoll physics */
 	UPROPERTY(EditAnywhere, Category="Damage")
 	FName PelvisBoneName;
+
+	/** AnimMontage that plays when the character receives non-lethal damage */
+	UPROPERTY(EditAnywhere, Category="Damage|Hit Reaction")
+	UAnimMontage* HitReactionMontage;
+
+	/** Animation to force-play when the AnimBP has no usable montage slot path */
+	UPROPERTY(EditAnywhere, Category="Damage|Hit Reaction")
+	UAnimSequenceBase* HitReactionAnimation;
+
+	/** If true, force the hit reaction sequence directly on the mesh and restore the AnimBP afterward */
+	UPROPERTY(EditAnywhere, Category="Damage|Hit Reaction")
+	bool bUseDirectHitReactionPlayback = true;
+
+	/** Playback rate for the hit reaction montage */
+	UPROPERTY(EditAnywhere, Category="Damage|Hit Reaction", meta = (ClampMin = 0.1, ClampMax = 3.0))
+	float HitReactionPlayRate = 1.5f;
+
+	/** Used by AnimBPs that implement hit reaction as a state instead of a montage slot */
+	UPROPERTY(EditAnywhere, Category="Damage|Hit Reaction", meta = (ClampMin = 0.1, ClampMax = 5.0, Units = "s"))
+	float HitReactionStateFallbackDuration = 1.75f;
+
+	/** Max upward movement impulse applied by non-lethal hit reactions */
+	UPROPERTY(EditAnywhere, Category="Damage|Hit Reaction", meta = (ClampMin = 0.0, ClampMax = 1000.0, Units = "cm/s"))
+	float MaxHitReactionUpwardImpulse = 0.0f;
+
+	/** If true, taking damage interrupts the current attack so the hit reaction can play */
+	UPROPERTY(EditAnywhere, Category="Damage|Hit Reaction")
+	bool bInterruptAttackOnHit = true;
 
 	/** Pointer to the life bar widget */
 	UPROPERTY(EditAnywhere, Category="Damage")
@@ -182,6 +212,21 @@ protected:
 	/** Character respawn timer */
 	FTimerHandle RespawnTimer;
 
+	/** Timer used to release AnimBP hit reaction state fallback variables */
+	FTimerHandle HitReactionTimer;
+
+	/** Animation mode to restore after forced single-node hit reaction playback */
+	EAnimationMode::Type AnimationModeBeforeHitReaction = EAnimationMode::AnimationBlueprint;
+
+	/** Anim class to restore after forced single-node hit reaction playback */
+	TSubclassOf<UAnimInstance> AnimClassBeforeHitReaction;
+
+	/** True while the mesh is temporarily playing the hit reaction as a single-node animation */
+	bool bUsingDirectHitReactionPlayback = false;
+
+	/** True while the hit reaction is already playing, so overlapping hits do not restart it */
+	bool bHitReactionActive = false;
+
 	/** Copy of the mesh's transform so we can reset it after ragdoll animations */
 	FTransform MeshStartingTransform;
 
@@ -253,6 +298,15 @@ protected:
 
 	/** Called from a delegate when the attack montage ends */
 	void AttackMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+
+	/** Plays the configured non-lethal damage reaction montage */
+	void PlayHitReaction();
+
+	/** Clears AnimBP hit reaction state fallback variables */
+	void EndHitReaction();
+
+	/** Sets an AnimInstance boolean variable by name if the current AnimBP defines it */
+	bool SetAnimInstanceBool(FName VariableName, bool bValue) const;
 
 	
 public:

@@ -15,6 +15,9 @@
 #include "TimerManager.h"
 #include "Engine/LocalPlayer.h"
 #include "CombatPlayerController.h"
+#include "Animation/AnimSequenceBase.h"
+#include "UObject/ConstructorHelpers.h"
+#include "UObject/UnrealType.h"
 
 ACombatCharacter::ACombatCharacter()
 {
@@ -22,6 +25,12 @@ ACombatCharacter::ACombatCharacter()
 
 	// bind the attack montage ended delegate
 	OnAttackMontageEnded.BindUObject(this, &ACombatCharacter::AttackMontageEnded);
+
+	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> DefaultHitReactionAnimation(TEXT("/Game/Characters/Kino/Animations/Player_Get_Hit_Back.Player_Get_Hit_Back"));
+	if (DefaultHitReactionAnimation.Succeeded())
+	{
+		HitReactionAnimation = DefaultHitReactionAnimation.Object;
+	}
 
 	// Set size for collision capsule
 	GetCapsuleComponent()->InitCapsuleSize(35.0f, 90.0f);
@@ -252,6 +261,122 @@ void ACombatCharacter::AttackMontageEnded(UAnimMontage* Montage, bool bInterrupt
 	}
 }
 
+void ACombatCharacter::PlayHitReaction()
+{
+	if (CurrentHP <= 0.0f)
+	{
+		return;
+	}
+
+	if (bHitReactionActive)
+	{
+		return;
+	}
+
+	USkeletalMeshComponent* MeshComponent = GetMesh();
+	if (UAnimInstance* AnimInstance = MeshComponent->GetAnimInstance())
+	{
+		if (bInterruptAttackOnHit)
+		{
+			// prevent an interrupted attack montage from replaying cached input.
+			CachedAttackInputTime = -AttackInputCacheTimeTolerance - 1.0f;
+			bIsAttacking = false;
+			bIsChargingAttack = false;
+			bHasLoopedChargedAttack = false;
+			ComboCount = 0;
+
+			if (ComboAttackMontage)
+			{
+				AnimInstance->Montage_Stop(0.1f, ComboAttackMontage);
+			}
+
+			if (ChargedAttackMontage)
+			{
+				AnimInstance->Montage_Stop(0.1f, ChargedAttackMontage);
+			}
+		}
+
+		float MontageLength = 0.0f;
+		const USkeletalMesh* SkeletalMesh = MeshComponent->GetSkeletalMeshAsset();
+		const bool bCanPlayAnimation = bUseDirectHitReactionPlayback
+			&& HitReactionAnimation
+			&& SkeletalMesh
+			&& HitReactionAnimation->GetSkeleton()
+			&& SkeletalMesh->GetSkeleton() == HitReactionAnimation->GetSkeleton();
+		const bool bCanPlayMontage = HitReactionMontage
+			&& SkeletalMesh
+			&& HitReactionMontage->GetSkeleton()
+			&& SkeletalMesh->GetSkeleton() == HitReactionMontage->GetSkeleton();
+
+		const bool bCanUseAnimState = SetAnimInstanceBool(TEXT("bHitReactionFinished"), false)
+			&& SetAnimInstanceBool(TEXT("bHitReacting"), true);
+
+		if (bCanUseAnimState)
+		{
+			MontageLength = HitReactionAnimation ? HitReactionAnimation->GetPlayLength() / HitReactionPlayRate : HitReactionStateFallbackDuration;
+		}
+		else if (bCanPlayAnimation)
+		{
+			AnimationModeBeforeHitReaction = MeshComponent->GetAnimationMode();
+			AnimClassBeforeHitReaction = MeshComponent->GetAnimClass();
+			bUsingDirectHitReactionPlayback = true;
+
+			MeshComponent->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+			MeshComponent->PlayAnimation(HitReactionAnimation, false);
+			MeshComponent->SetPlayRate(HitReactionPlayRate);
+
+			MontageLength = HitReactionAnimation->GetPlayLength() / HitReactionPlayRate;
+		}
+		else if (bCanPlayMontage)
+		{
+			MontageLength = AnimInstance->Montage_Play(HitReactionMontage, HitReactionPlayRate, EMontagePlayReturnType::MontageLength, 0.0f, true);
+		}
+
+		bHitReactionActive = true;
+
+		const float HitReactionDuration = MontageLength > 0.0f ? MontageLength : HitReactionStateFallbackDuration;
+		GetWorld()->GetTimerManager().SetTimer(HitReactionTimer, this, &ACombatCharacter::EndHitReaction, HitReactionDuration, false);
+	}
+}
+
+void ACombatCharacter::EndHitReaction()
+{
+	if (bUsingDirectHitReactionPlayback)
+	{
+		USkeletalMeshComponent* MeshComponent = GetMesh();
+		MeshComponent->SetAnimationMode(AnimationModeBeforeHitReaction);
+		if (AnimationModeBeforeHitReaction == EAnimationMode::AnimationBlueprint && AnimClassBeforeHitReaction)
+		{
+			MeshComponent->SetAnimInstanceClass(AnimClassBeforeHitReaction);
+		}
+
+		bUsingDirectHitReactionPlayback = false;
+		AnimClassBeforeHitReaction = nullptr;
+	}
+
+	SetAnimInstanceBool(TEXT("bHitReacting"), false);
+	SetAnimInstanceBool(TEXT("bHitReactionFinished"), true);
+	bHitReactionActive = false;
+}
+
+bool ACombatCharacter::SetAnimInstanceBool(FName VariableName, bool bValue) const
+{
+	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
+	if (AnimInstance == nullptr)
+	{
+		return false;
+	}
+
+	FBoolProperty* BoolProperty = FindFProperty<FBoolProperty>(AnimInstance->GetClass(), VariableName);
+	if (BoolProperty == nullptr)
+	{
+		return false;
+	}
+
+	BoolProperty->SetPropertyValue_InContainer(AnimInstance, bValue);
+	return true;
+}
+
 void ACombatCharacter::DoAttackTrace(FName DamageSourceBone)
 {
 	// sweep for objects in front of the character to be hit by the attack
@@ -387,14 +512,22 @@ void ACombatCharacter::ApplyDamage(float Damage, AActor* DamageCauser, const FVe
 	if (ActualDamage > 0.0f)
 	{
 		// apply the knockback impulse
-		GetCharacterMovement()->AddImpulse(DamageImpulse, true);
+		FVector MovementImpulse = DamageImpulse;
+		if (CurrentHP > 0.0f)
+		{
+			MovementImpulse.Z = FMath::Clamp(MovementImpulse.Z, -1000.0f, MaxHitReactionUpwardImpulse);
+		}
+		GetCharacterMovement()->AddImpulse(MovementImpulse, true);
 
 		// is the character ragdolling?
 		if (GetMesh()->IsSimulatingPhysics())
 		{
 			// apply an impulse to the ragdoll
-			GetMesh()->AddImpulseAtLocation(DamageImpulse * GetMesh()->GetMass(), DamageLocation);
+			GetMesh()->AddImpulseAtLocation(MovementImpulse * GetMesh()->GetMass(), DamageLocation);
 		}
+
+		// play the non-lethal hit reaction before Blueprint effects fire
+		PlayHitReaction();
 
 		// pass control to BP to play effects, etc.
 		ReceivedDamage(ActualDamage, DamageLocation, DamageImpulse.GetSafeNormal());
@@ -404,6 +537,10 @@ void ACombatCharacter::ApplyDamage(float Damage, AActor* DamageCauser, const FVe
 
 void ACombatCharacter::HandleDeath()
 {
+	GetWorld()->GetTimerManager().ClearTimer(HitReactionTimer);
+	bUsingDirectHitReactionPlayback = false;
+	bHitReactionActive = false;
+
 	// disable movement while we're dead
 	GetCharacterMovement()->DisableMovement();
 
@@ -506,6 +643,7 @@ void ACombatCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 	// clear the respawn timer
 	GetWorld()->GetTimerManager().ClearTimer(RespawnTimer);
+	GetWorld()->GetTimerManager().ClearTimer(HitReactionTimer);
 }
 
 void ACombatCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -544,4 +682,3 @@ void ACombatCharacter::NotifyControllerChanged()
 		PC->SetRespawnTransform(GetActorTransform());
 	}
 }
-

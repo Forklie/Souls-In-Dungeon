@@ -42,25 +42,23 @@ void AMyAIController::Tick(float DeltaTime)
         AI->SetActorRotation(TargetRotation);
 
         // 🧠 START ATTACK TIMER
-        if (LastAttackStartTime == 0.0f)
+        if (LastAttackStartTime == 0.0f || CurrentTime - LastAttackStartTime >= AttackInterval)
         {
             LastAttackStartTime = CurrentTime;
+            bDamageAppliedThisAttack = false;
         }
 
         // 💥 APPLY DAMAGE AFTER DELAY
-        if ((CurrentTime - LastAttackStartTime) >= AttackDelay)
+        if (!bDamageAppliedThisAttack && (CurrentTime - LastAttackStartTime) >= AttackDelay)
         {
-            if (CurrentTime - LastDamageTime > DamageCooldown)
+            ASoul_and_dungeonCharacter* PlayerChar = Cast<ASoul_and_dungeonCharacter>(Player);
+
+            if (PlayerChar)
             {
-                ASoul_and_dungeonCharacter* PlayerChar = Cast<ASoul_and_dungeonCharacter>(Player);
-
-                if (PlayerChar)
-                {
-                    PlayerChar->TakeDamageSimple(10.0f);
-                }
-
-                LastDamageTime = CurrentTime;
+                PlayerChar->TakeDamageSimple(10.0f, AI);
             }
+
+            bDamageAppliedThisAttack = true;
         }
     }
     else
@@ -69,6 +67,7 @@ void AMyAIController::Tick(float DeltaTime)
 
         // 🔄 RESET ATTACK TIMER
         LastAttackStartTime = 0.0f;
+        bDamageAppliedThisAttack = false;
     }
 
     // 🔴 SET ANIMATION VARIABLE

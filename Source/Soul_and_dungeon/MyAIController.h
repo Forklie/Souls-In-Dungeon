@@ -19,8 +19,8 @@ private:
     float StopDistance = 150.0f;
 
     // 💥 DAMAGE SYSTEM
-    float DamageCooldown = 3.0f;
-    float LastDamageTime = 0.0f;
     float AttackDelay = 0.5f;
+    float AttackInterval = 1.733f;
     float LastAttackStartTime = 0.0f;
+    bool bDamageAppliedThisAttack = false;
 };

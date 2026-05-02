@@ -13,9 +13,20 @@
 #include "Soul_and_dungeon.h"
 #include "Kismet/GameplayStatics.h"
 #include "Blueprint/UserWidget.h"
+#include "Animation/AnimInstance.h"
+#include "Animation/AnimSequenceBase.h"
+#include "TimerManager.h"
+#include "UObject/ConstructorHelpers.h"
+#include "UObject/UnrealType.h"
 
 ASoul_and_dungeonCharacter::ASoul_and_dungeonCharacter()
 {
+	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> DefaultHitReactionAnimation(TEXT("/Game/Characters/Kino/Animations/Player_Get_Hit_Back.Player_Get_Hit_Back"));
+	if (DefaultHitReactionAnimation.Succeeded())
+	{
+		HitReactionAnimation = DefaultHitReactionAnimation.Object;
+	}
+
 	// Set size for collision capsule
 	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
 		
@@ -47,6 +58,8 @@ ASoul_and_dungeonCharacter::ASoul_and_dungeonCharacter()
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 	FollowCamera->bUsePawnControlRotation = false;
+
+	PrimaryActorTick.bCanEverTick = true;
 
 	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
 	// are set in the derived blueprint asset named ThirdPersonCharacter (to avoid direct content references in C++)
@@ -136,7 +149,7 @@ void ASoul_and_dungeonCharacter::DoJumpEnd()
 
 
 
-void ASoul_and_dungeonCharacter::TakeDamageSimple(float DamageAmount)
+void ASoul_and_dungeonCharacter::TakeDamageSimple(float DamageAmount, AActor* DamageCauser)
 {
 	Health -= DamageAmount;
 
@@ -153,6 +166,9 @@ void ASoul_and_dungeonCharacter::TakeDamageSimple(float DamageAmount)
 	// 💀 PLAYER DEAD
 	if (Health <= 0)
 	{
+		GetWorldTimerManager().ClearTimer(HitReactionTimer);
+		EndHitReaction();
+
 		if (GEngine)
 		{
 			GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Red, TEXT("Player Dead"));
@@ -161,11 +177,23 @@ void ASoul_and_dungeonCharacter::TakeDamageSimple(float DamageAmount)
 		// 🔄 RESTART LEVEL
 		UGameplayStatics::OpenLevel(this, FName(*GetWorld()->GetName()));
 	}
+	else
+	{
+		if (IsBackHit(DamageCauser))
+		{
+			PlayHitReaction();
+		}
+	}
 }
 
 void ASoul_and_dungeonCharacter::BeginPlay()
 {
 	Super::BeginPlay();
+
+	HitReactionOverlayWeightCurrent = 0.0f;
+	HitReactionOverlayWeightTarget = 0.0f;
+	SetAnimInstanceBool(TEXT("bHitReactionOverlay"), false);
+	SetAnimInstanceFloat(TEXT("HitReactionOverlayWeight"), 0.0f);
 
 	if (UClass* WidgetClass = LoadClass<UUserWidget>(nullptr, TEXT("/Game/ThirdPerson/UI/WBP_HealthBar.WBP_HealthBar_C")))
 	{
@@ -175,4 +203,131 @@ void ASoul_and_dungeonCharacter::BeginPlay()
 			Widget->AddToViewport();
 		}
 	}
+}
+
+void ASoul_and_dungeonCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	GetWorldTimerManager().ClearTimer(HitReactionTimer);
+	Super::EndPlay(EndPlayReason);
+}
+
+void ASoul_and_dungeonCharacter::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	const float BlendTime = HitReactionOverlayWeightTarget > HitReactionOverlayWeightCurrent
+		? HitReactionBlendInTime
+		: HitReactionBlendOutTime;
+	const float InterpSpeed = BlendTime > KINDA_SMALL_NUMBER ? 1.0f / BlendTime : BIG_NUMBER;
+	const float NewWeight = FMath::FInterpConstantTo(
+		HitReactionOverlayWeightCurrent,
+		HitReactionOverlayWeightTarget,
+		DeltaSeconds,
+		InterpSpeed);
+
+	if (!FMath::IsNearlyEqual(NewWeight, HitReactionOverlayWeightCurrent, KINDA_SMALL_NUMBER))
+	{
+		HitReactionOverlayWeightCurrent = NewWeight;
+		SetAnimInstanceFloat(TEXT("HitReactionOverlayWeight"), HitReactionOverlayWeightCurrent);
+	}
+
+	if (HitReactionOverlayWeightTarget <= KINDA_SMALL_NUMBER
+		&& HitReactionOverlayWeightCurrent <= KINDA_SMALL_NUMBER)
+	{
+		SetAnimInstanceBool(TEXT("bHitReactionOverlay"), false);
+	}
+}
+
+void ASoul_and_dungeonCharacter::PlayHitReaction()
+{
+	if (bHitReactionActive)
+	{
+		return;
+	}
+
+	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
+	if (AnimInstance == nullptr)
+	{
+		return;
+	}
+
+	if (!SetAnimInstanceBool(TEXT("bHitReactionOverlay"), true))
+	{
+		return;
+	}
+
+	HitReactionOverlayWeightTarget = 1.0f;
+	SetAnimInstanceFloat(TEXT("HitReactionOverlayWeight"), HitReactionOverlayWeightCurrent);
+
+	// Keep the old state-machine hit route inactive. The active hit path is the
+	// AnimGraph blend that switches to the composed hit pose.
+	SetAnimInstanceBool(TEXT("bHitReacting"), false);
+	SetAnimInstanceBool(TEXT("bHitReactionFinished"), true);
+
+	bHitReactionActive = true;
+
+	const float HitReactionDuration = HitReactionAnimation ? HitReactionAnimation->GetPlayLength() / HitReactionPlayRate : 1.75f;
+	GetWorldTimerManager().SetTimer(HitReactionTimer, this, &ASoul_and_dungeonCharacter::EndHitReaction, HitReactionDuration, false);
+}
+
+void ASoul_and_dungeonCharacter::EndHitReaction()
+{
+	HitReactionOverlayWeightTarget = 0.0f;
+	SetAnimInstanceBool(TEXT("bHitReacting"), false);
+	SetAnimInstanceBool(TEXT("bHitReactionFinished"), true);
+	bHitReactionActive = false;
+}
+
+bool ASoul_and_dungeonCharacter::IsBackHit(AActor* DamageCauser) const
+{
+	if (DamageCauser == nullptr)
+	{
+		return false;
+	}
+
+	const FVector ToCauser = (DamageCauser->GetActorLocation() - GetActorLocation()).GetSafeNormal2D();
+	if (ToCauser.IsNearlyZero())
+	{
+		return false;
+	}
+
+	const FVector Forward = GetActorForwardVector().GetSafeNormal2D();
+	const float ForwardDotToCauser = FVector::DotProduct(Forward, ToCauser);
+	return ForwardDotToCauser <= BackHitDotThreshold;
+}
+
+bool ASoul_and_dungeonCharacter::SetAnimInstanceBool(FName VariableName, bool bValue) const
+{
+	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
+	if (AnimInstance == nullptr)
+	{
+		return false;
+	}
+
+	FBoolProperty* BoolProperty = FindFProperty<FBoolProperty>(AnimInstance->GetClass(), VariableName);
+	if (BoolProperty == nullptr)
+	{
+		return false;
+	}
+
+	BoolProperty->SetPropertyValue_InContainer(AnimInstance, bValue);
+	return true;
+}
+
+bool ASoul_and_dungeonCharacter::SetAnimInstanceFloat(FName VariableName, float Value) const
+{
+	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
+	if (AnimInstance == nullptr)
+	{
+		return false;
+	}
+
+	FFloatProperty* FloatProperty = FindFProperty<FFloatProperty>(AnimInstance->GetClass(), VariableName);
+	if (FloatProperty == nullptr)
+	{
+		return false;
+	}
+
+	FloatProperty->SetPropertyValue_InContainer(AnimInstance, Value);
+	return true;
 }
