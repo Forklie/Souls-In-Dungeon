@@ -2,7 +2,11 @@
 
 #include "CoreMinimal.h"
 #include "AIController.h"
+#include "SecondarySearchSolver.h"
 #include "MyAIController.generated.h"
+
+class UAnimInstance;
+class ASecondarySearchVisualizerActor;
 
 UCLASS()
 class SOUL_AND_DUNGEON_API AMyAIController : public AAIController
@@ -16,11 +20,35 @@ protected:
     virtual void Tick(float DeltaTime) override;
 
 private:
+    void UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float CurrentTime);
+    FSecondarySearchSettings BuildSecondarySearchSettings() const;
+    bool ShouldRefreshSearchDebug(const APawn* Player, float CurrentTime, ESecondarySearchMode SearchMode, const FSecondarySearchSettings& Settings) const;
+    void EnsureSecondarySearchVisualizer(APawn* AI);
+    void HideSecondarySearchVisualizer();
+    void SetAttackAnimationState(UAnimInstance* AnimInstance, bool bIsAttacking) const;
+
     float StopDistance = 150.0f;
 
-    // 💥 DAMAGE SYSTEM
     float DamageCooldown = 3.0f;
     float LastDamageTime = 0.0f;
     float AttackDelay = 0.5f;
     float LastAttackStartTime = 0.0f;
+
+    FSecondarySearchSettings SecondarySearchSettings;
+    FSecondarySearchSettings ActiveSecondarySearchSettings;
+    FSecondarySearchTask SearchTask;
+    FSecondarySearchResult LastSearchResult;
+
+    UPROPERTY()
+    TObjectPtr<ASecondarySearchVisualizerActor> SearchVisualizer;
+    ESecondarySearchMode LastSearchMode = ESecondarySearchMode::UCS;
+    FVector LastSearchGoal = FVector::ZeroVector;
+    FString LastSearchFailureReason;
+    float LastSearchTime = -1000000.0f;
+    float LastFailureLogTime = -1000000.0f;
+    float LastVisualizerUpdateTime = -1000000.0f;
+    float SearchRefreshInterval = 0.35f;
+    int32 LastDebugRevision = -1;
+    bool bHasSearchResult = false;
+    bool bDebugSearchWasEnabled = false;
 };
