@@ -5,7 +5,8 @@
 enum class ESecondarySearchMode : uint8
 {
 	BFS,
-	UCS
+	UCS,
+	AStar
 };
 
 enum class ESecondarySearchVisualEventType : uint8
@@ -23,6 +24,13 @@ enum class ESecondarySearchVisualStyle : uint8
 	Fluid
 };
 
+enum class ESecondarySearchVisualQuality : uint8
+{
+	Low,
+	Medium,
+	High
+};
+
 struct FSecondarySearchVisualEvent
 {
 	ESecondarySearchVisualEventType Type = ESecondarySearchVisualEventType::NodeDiscovered;
@@ -35,17 +43,17 @@ struct FSecondarySearchVisualEvent
 
 struct FSecondarySearchSettings
 {
-	float CellSize = 100.0f;
+	float CellSize = 55.0f;
 	bool bAllowDiagonal = false;
-	int32 MaxExpandedNodes = 900;
+	int32 MaxExpandedNodes = 2600;
 	float MaxSearchDistance = 4000.0f;
-	float GoalAcceptanceRadius = 70.0f;
-	float PathPointReachRadius = 50.0f;
-	FVector ProjectionExtent = FVector(50.0f, 50.0f, 250.0f);
+	float GoalAcceptanceRadius = 55.0f;
+	float PathPointReachRadius = 35.0f;
+	FVector ProjectionExtent = FVector(80.0f, 80.0f, 300.0f);
 	float DebugDrawDuration = 0.75f;
 	float DebugPointZOffset = 80.0f;
-	int32 MaxDebugDrawNodes = 900;
-	int32 MaxDebugSearchStepsPerTick = 16;
+	int32 MaxDebugDrawNodes = 2600;
+	int32 MaxDebugSearchStepsPerTick = 18;
 	float DebugVisualizerUpdateInterval = 0.05f;
 	float PathTubeRadius = 5.0f;
 	float VisualizationRevealRate = 900.0f;
@@ -53,12 +61,12 @@ struct FSecondarySearchSettings
 	float FluidPathRevealSpeed = 1100.0f;
 	float WavePathRetentionSeconds = 4.0f;
 	float WaveTravelSeconds = 0.8f;
-	float DebugExpandedNodeRadius = 26.0f;
-	float DebugFrontierNodeRadius = 32.0f;
+	float DebugExpandedNodeRadius = 24.0f;
+	float DebugFrontierNodeRadius = 29.0f;
 	float DebugNodeHeight = 2.0f;
 	float DebugFrontierNodeHeight = 2.5f;
-	float DebugEndpointRadius = 50.0f;
-	float DebugTargetRadius = 44.0f;
+	float DebugEndpointRadius = 44.0f;
+	float DebugTargetRadius = 38.0f;
 };
 
 struct FSecondarySearchResult
@@ -67,6 +75,8 @@ struct FSecondarySearchResult
 	ESecondarySearchMode Mode = ESecondarySearchMode::UCS;
 	FString FailureReason;
 	TArray<FVector> Path;
+	TArray<FVector> PreviewPath;
+	TArray<FVector> SampledNodes;
 	TArray<FVector> ExpandedNodes;
 	TArray<FVector> FrontierNodes;
 	TArray<float> PathCosts;
@@ -92,6 +102,7 @@ struct FSecondarySearchOpenItem
 {
 	FIntPoint Key = FIntPoint::ZeroValue;
 	float Priority = 0.0f;
+	int32 TieBreaker = 0;
 };
 
 class FSecondarySearchSolver
@@ -123,7 +134,7 @@ public:
 	FSecondarySearchResult BuildDebugResult() const;
 
 private:
-	void Finish(bool bSuccess, const FString& FailureReason);
+	void Finish(bool bSuccess, const FString& FailureReason, const FSecondarySearchSettings& Settings);
 
 	FSecondarySearchResult Result;
 	ESecondarySearchMode Mode = ESecondarySearchMode::UCS;
@@ -131,12 +142,14 @@ private:
 	FIntPoint StartKey = FIntPoint::ZeroValue;
 	FIntPoint EndKey = FIntPoint::ZeroValue;
 	TMap<FIntPoint, FVector> ProjectedCache;
+	TSet<FIntPoint> RejectedProjectionCache;
 	TMap<FIntPoint, FSecondarySearchNodeRecord> Records;
 	TSet<FIntPoint> ClosedSet;
 	TArray<FIntPoint> NeighborOffsets;
 	TArray<FIntPoint> Queue;
 	TArray<FSecondarySearchOpenItem> OpenSet;
 	int32 QueueHead = 0;
+	int32 OpenSequence = 0;
 	bool bActive = false;
 	bool bFinished = false;
 };
@@ -157,9 +170,21 @@ public:
 	static bool AreTrailsEnabled();
 	static float GetWaveSpeed();
 	static int32 GetPathHistoryCount();
+	static float GetNodePulse();
+	static float GetNodeFadeTime();
+	static float GetPathFadeTime();
+	static bool ShouldUseLastPathFallback();
+	static ESecondarySearchVisualQuality GetVisualQuality();
+	static float GetGlowIntensity();
+	static float GetFlowBandWidth();
+	static float GetNodeSoftness();
 	static float GetCellSize();
 	static float GetNodeScale();
 	static int32 GetNodeDensity();
+	static bool ShouldShowBaseGrid();
+	static float GetFieldRadius();
+	static float GetTargetSmoothing();
 	static FString GetModeName(ESecondarySearchMode Mode);
 	static FString GetVisualStyleName(ESecondarySearchVisualStyle Style);
+	static FString GetVisualQualityName(ESecondarySearchVisualQuality Quality);
 };

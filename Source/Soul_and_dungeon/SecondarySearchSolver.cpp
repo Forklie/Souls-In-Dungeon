@@ -32,6 +32,7 @@ static bool GetProjectedPoint(
 	const FVector& Origin,
 	const FSecondarySearchSettings& Settings,
 	TMap<FIntPoint, FVector>& ProjectedCache,
+	TSet<FIntPoint>& RejectedProjectionCache,
 	FVector& OutLocation)
 {
 	if (const FVector* CachedLocation = ProjectedCache.Find(Key))
@@ -40,15 +41,22 @@ static bool GetProjectedPoint(
 		return true;
 	}
 
+	if (RejectedProjectionCache.Contains(Key))
+	{
+		return false;
+	}
+
 	const FVector Candidate = GridToWorld(Key, Origin, Settings.CellSize);
 	if (FVector::Dist2D(Origin, Candidate) > Settings.MaxSearchDistance)
 	{
+		RejectedProjectionCache.Add(Key);
 		return false;
 	}
 
 	FNavLocation ProjectedLocation;
 	if (!NavSystem->ProjectPointToNavigation(Candidate, ProjectedLocation, Settings.ProjectionExtent))
 	{
+		RejectedProjectionCache.Add(Key);
 		return false;
 	}
 
@@ -85,8 +93,40 @@ static void AddNeighborOffsets(bool bAllowDiagonal, TArray<FIntPoint>& OutOffset
 
 static bool IsGoalReached(const FVector& Location, const FVector& Goal, const FSecondarySearchSettings& Settings)
 {
-	const float AcceptanceRadius = FMath::Max3(60.0f, Settings.GoalAcceptanceRadius, Settings.CellSize * 0.7f);
+	const float AcceptanceRadius = FMath::Max3(45.0f, Settings.GoalAcceptanceRadius, Settings.CellSize * 0.75f);
 	return FVector::Dist2D(Location, Goal) <= AcceptanceRadius;
+}
+
+static float GetSearchPriority(ESecondarySearchMode Mode, const FVector& Location, const FVector& Goal, float CostSoFar)
+{
+	return Mode == ESecondarySearchMode::AStar ? CostSoFar + FVector::Dist2D(Location, Goal) : CostSoFar;
+}
+
+static bool PopBestOpenItem(TArray<FSecondarySearchOpenItem>& OpenSet, FSecondarySearchOpenItem& OutItem)
+{
+	if (OpenSet.Num() == 0)
+	{
+		return false;
+	}
+
+	int32 BestIndex = 0;
+	float BestPriority = OpenSet[0].Priority;
+	int32 BestTieBreaker = OpenSet[0].TieBreaker;
+	for (int32 Index = 1; Index < OpenSet.Num(); ++Index)
+	{
+		const FSecondarySearchOpenItem& Candidate = OpenSet[Index];
+		if (Candidate.Priority < BestPriority ||
+			(FMath::IsNearlyEqual(Candidate.Priority, BestPriority) && Candidate.TieBreaker < BestTieBreaker))
+		{
+			BestPriority = Candidate.Priority;
+			BestTieBreaker = Candidate.TieBreaker;
+			BestIndex = Index;
+		}
+	}
+
+	OutItem = OpenSet[BestIndex];
+	OpenSet.RemoveAtSwap(BestIndex, 1, EAllowShrinking::No);
+	return true;
 }
 
 static void BuildPath(
@@ -115,14 +155,12 @@ static void BuildPath(
 	}
 
 	Algo::Reverse(ReversedKeys);
-
 	for (const FIntPoint& Key : ReversedKeys)
 	{
 		if (const FVector* Location = ProjectedCache.Find(Key))
 		{
 			Result.Path.Add(*Location);
 		}
-
 		if (const FSecondarySearchNodeRecord* Record = Records.Find(Key))
 		{
 			Result.PathCosts.Add(Record->Cost);
@@ -169,6 +207,23 @@ static void AddPathVisualEvents(FSecondarySearchResult& Result)
 	}
 }
 
+static void SyncSampledNodes(
+	const TMap<FIntPoint, FVector>& ProjectedCache,
+	const FSecondarySearchSettings& Settings,
+	FSecondarySearchResult& Result)
+{
+	Result.SampledNodes.Reset();
+	Result.SampledNodes.Reserve(FMath::Min(ProjectedCache.Num(), Settings.MaxDebugDrawNodes));
+	for (const TPair<FIntPoint, FVector>& ProjectedPoint : ProjectedCache)
+	{
+		if (Result.SampledNodes.Num() >= Settings.MaxDebugDrawNodes)
+		{
+			break;
+		}
+		Result.SampledNodes.Add(ProjectedPoint.Value);
+	}
+}
+
 #if !UE_BUILD_SHIPPING
 namespace SecondarySearchDebugState
 {
@@ -176,22 +231,32 @@ namespace SecondarySearchDebugState
 	static bool bPendingClear = false;
 	static bool bXRayEnabled = true;
 	static bool bTrailsEnabled = true;
+	static bool bShowBaseGrid = true;
+	static bool bLastPathFallback = true;
 	static ESecondarySearchMode Mode = ESecondarySearchMode::UCS;
 	static ESecondarySearchVisualStyle VisualStyle = ESecondarySearchVisualStyle::Fluid;
+	static ESecondarySearchVisualQuality VisualQuality = ESecondarySearchVisualQuality::High;
 	static int32 Revision = 0;
-	static int32 MaxDebugNodes = 900;
+	static int32 MaxDebugNodes = 2600;
+	static int32 PathHistoryCount = 3;
 	static float VisualSpeed = 1.0f;
 	static float WaveSpeed = 1.0f;
-	static float CellSize = 100.0f;
-	static float NodeScale = 0.45f;
-	static int32 PathHistoryCount = 3;
+	static float NodePulse = 1.0f;
+	static float NodeFadeTime = 1.2f;
+	static float PathFadeTime = 4.0f;
+	static float GlowIntensity = 1.0f;
+	static float FlowBandWidth = 0.18f;
+	static float NodeSoftness = 0.75f;
+	static float CellSize = 55.0f;
+	static float NodeScale = 0.35f;
+	static float FieldRadius = 4000.0f;
+	static float TargetSmoothing = 18.0f;
 
 	static void ToggleCommand()
 	{
 		bEnabled = !bEnabled;
 		Revision++;
 		UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search debug %s"), bEnabled ? TEXT("enabled") : TEXT("disabled"));
-
 		if (GEngine)
 		{
 			GEngine->AddOnScreenDebugMessage(
@@ -218,23 +283,18 @@ namespace SecondarySearchDebugState
 		{
 			Mode = ESecondarySearchMode::UCS;
 		}
+		else if (Args[0].Equals(TEXT("AStar"), ESearchCase::IgnoreCase) || Args[0].Equals(TEXT("A*"), ESearchCase::IgnoreCase))
+		{
+			Mode = ESecondarySearchMode::AStar;
+		}
 		else
 		{
-			UE_LOG(LogSoul_and_dungeon, Warning, TEXT("Unknown secondary search mode '%s'. Use BFS or UCS."), *Args[0]);
+			UE_LOG(LogSoul_and_dungeon, Warning, TEXT("Unknown secondary search mode '%s'. Use BFS, UCS, or AStar."), *Args[0]);
 			return;
 		}
 
 		Revision++;
 		UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search mode set to %s"), *FSecondarySearchDebug::GetModeName(Mode));
-
-		if (GEngine)
-		{
-			GEngine->AddOnScreenDebugMessage(
-				913701,
-				2.5f,
-				FColor::Cyan,
-				FString::Printf(TEXT("Secondary Search Mode: %s"), *FSecondarySearchDebug::GetModeName(Mode)));
-		}
 	}
 
 	static void ClearCommand()
@@ -244,69 +304,34 @@ namespace SecondarySearchDebugState
 		UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search debug clear requested."));
 	}
 
-	static void XRayCommand(const TArray<FString>& Args)
+	static void BoolCommand(const TArray<FString>& Args, bool& Value, const TCHAR* Label)
 	{
-		if (Args.Num() == 0)
+		if (Args.Num() > 0)
 		{
-			UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search XRay: %s"), bXRayEnabled ? TEXT("enabled") : TEXT("disabled"));
-			return;
+			Value = FCString::Atoi(*Args[0]) != 0;
+			Revision++;
 		}
-
-		bXRayEnabled = FCString::Atoi(*Args[0]) != 0;
-		Revision++;
-		UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search XRay %s"), bXRayEnabled ? TEXT("enabled") : TEXT("disabled"));
+		UE_LOG(LogSoul_and_dungeon, Display, TEXT("%s: %s"), Label, Value ? TEXT("enabled") : TEXT("disabled"));
 	}
 
-	static void MaxNodesCommand(const TArray<FString>& Args)
+	static void IntCommand(const TArray<FString>& Args, int32& Value, int32 MinValue, int32 MaxValue, const TCHAR* Label)
 	{
-		if (Args.Num() == 0)
+		if (Args.Num() > 0)
 		{
-			UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search max debug nodes: %d"), MaxDebugNodes);
-			return;
+			Value = FMath::Clamp(FCString::Atoi(*Args[0]), MinValue, MaxValue);
+			Revision++;
 		}
-
-		MaxDebugNodes = FMath::Clamp(FCString::Atoi(*Args[0]), 128, 1600);
-		Revision++;
-		UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search max debug nodes set to %d"), MaxDebugNodes);
+		UE_LOG(LogSoul_and_dungeon, Display, TEXT("%s: %d"), Label, Value);
 	}
 
-	static void NodeDensityCommand(const TArray<FString>& Args)
+	static void FloatCommand(const TArray<FString>& Args, float& Value, float MinValue, float MaxValue, const TCHAR* Label)
 	{
-		if (Args.Num() == 0)
+		if (Args.Num() > 0)
 		{
-			UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search node density: %d"), MaxDebugNodes);
-			return;
+			Value = FMath::Clamp(FCString::Atof(*Args[0]), MinValue, MaxValue);
+			Revision++;
 		}
-
-		MaxDebugNodes = FMath::Clamp(FCString::Atoi(*Args[0]), 128, 1600);
-		Revision++;
-		UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search node density set to %d"), MaxDebugNodes);
-	}
-
-	static void CellSizeCommand(const TArray<FString>& Args)
-	{
-		if (Args.Num() == 0)
-		{
-			UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search cell size: %.1f"), CellSize);
-			return;
-		}
-
-		CellSize = FMath::Clamp(FCString::Atof(*Args[0]), 70.0f, 200.0f);
-		Revision++;
-		UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search cell size set to %.1f"), CellSize);
-	}
-
-	static void NodeScaleCommand(const TArray<FString>& Args)
-	{
-		if (Args.Num() == 0)
-		{
-			UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search node scale: %.2f"), NodeScale);
-			return;
-		}
-
-		NodeScale = FMath::Clamp(FCString::Atof(*Args[0]), 0.25f, 1.25f);
-		Revision++;
-		UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search node scale set to %.2f"), NodeScale);
+		UE_LOG(LogSoul_and_dungeon, Display, TEXT("%s: %.2f"), Label, Value);
 	}
 
 	static void StyleCommand(const TArray<FString>& Args)
@@ -316,7 +341,6 @@ namespace SecondarySearchDebugState
 			UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search visual style: %s"), *FSecondarySearchDebug::GetVisualStyleName(VisualStyle));
 			return;
 		}
-
 		if (Args[0].Equals(TEXT("Simple"), ESearchCase::IgnoreCase))
 		{
 			VisualStyle = ESecondarySearchVisualStyle::Simple;
@@ -330,127 +354,60 @@ namespace SecondarySearchDebugState
 			UE_LOG(LogSoul_and_dungeon, Warning, TEXT("Unknown secondary search visual style '%s'. Use Simple or Fluid."), *Args[0]);
 			return;
 		}
-
 		Revision++;
-		UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search visual style set to %s"), *FSecondarySearchDebug::GetVisualStyleName(VisualStyle));
 	}
 
-	static void SpeedCommand(const TArray<FString>& Args)
+	static void QualityCommand(const TArray<FString>& Args)
 	{
 		if (Args.Num() == 0)
 		{
-			UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search visual speed: %.2f"), VisualSpeed);
+			UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search visual quality: %s"), *FSecondarySearchDebug::GetVisualQualityName(VisualQuality));
 			return;
 		}
-
-		VisualSpeed = FMath::Clamp(FCString::Atof(*Args[0]), 0.1f, 5.0f);
-		Revision++;
-		UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search visual speed set to %.2f"), VisualSpeed);
-	}
-
-	static void TrailsCommand(const TArray<FString>& Args)
-	{
-		if (Args.Num() == 0)
+		if (Args[0].Equals(TEXT("Low"), ESearchCase::IgnoreCase))
 		{
-			UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search path history trails: %s"), bTrailsEnabled ? TEXT("enabled") : TEXT("disabled"));
-			return;
+			VisualQuality = ESecondarySearchVisualQuality::Low;
 		}
-
-		bTrailsEnabled = FCString::Atoi(*Args[0]) != 0;
-		Revision++;
-		UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search path history trails %s"), bTrailsEnabled ? TEXT("enabled") : TEXT("disabled"));
-	}
-
-	static void WaveSpeedCommand(const TArray<FString>& Args)
-	{
-		if (Args.Num() == 0)
+		else if (Args[0].Equals(TEXT("Medium"), ESearchCase::IgnoreCase))
 		{
-			UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search wave speed: %.2f"), WaveSpeed);
-			return;
+			VisualQuality = ESecondarySearchVisualQuality::Medium;
 		}
-
-		WaveSpeed = FMath::Clamp(FCString::Atof(*Args[0]), 0.1f, 5.0f);
-		Revision++;
-		UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search wave speed set to %.2f"), WaveSpeed);
-	}
-
-	static void PathHistoryCommand(const TArray<FString>& Args)
-	{
-		if (Args.Num() == 0)
+		else if (Args[0].Equals(TEXT("High"), ESearchCase::IgnoreCase))
 		{
-			UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search path history count: %d"), PathHistoryCount);
+			VisualQuality = ESecondarySearchVisualQuality::High;
+		}
+		else
+		{
+			UE_LOG(LogSoul_and_dungeon, Warning, TEXT("Unknown secondary search visual quality '%s'. Use Low, Medium, or High."), *Args[0]);
 			return;
 		}
-
-		PathHistoryCount = FMath::Clamp(FCString::Atoi(*Args[0]), 1, 8);
 		Revision++;
-		UE_LOG(LogSoul_and_dungeon, Display, TEXT("Secondary search path history count set to %d"), PathHistoryCount);
 	}
 
-	static FAutoConsoleCommand ToggleConsoleCommand(
-		TEXT("sd.SearchDebug.Toggle"),
-		TEXT("Toggle secondary search debug drawing."),
-		FConsoleCommandDelegate::CreateStatic(&ToggleCommand));
-
-	static FAutoConsoleCommand ModeConsoleCommand(
-		TEXT("sd.SearchDebug.Mode"),
-		TEXT("Set secondary search mode. Usage: sd.SearchDebug.Mode BFS or sd.SearchDebug.Mode UCS."),
-		FConsoleCommandWithArgsDelegate::CreateStatic(&ModeCommand));
-
-	static FAutoConsoleCommand ClearConsoleCommand(
-		TEXT("sd.SearchDebug.Clear"),
-		TEXT("Clear secondary search debug drawing."),
-		FConsoleCommandDelegate::CreateStatic(&ClearCommand));
-
-	static FAutoConsoleCommand XRayConsoleCommand(
-		TEXT("sd.SearchDebug.XRay"),
-		TEXT("Set secondary search depth-priority rendering. Usage: sd.SearchDebug.XRay 0 or 1."),
-		FConsoleCommandWithArgsDelegate::CreateStatic(&XRayCommand));
-
-	static FAutoConsoleCommand MaxNodesConsoleCommand(
-		TEXT("sd.SearchDebug.MaxNodes"),
-		TEXT("Set secondary search max visible nodes. Usage: sd.SearchDebug.MaxNodes 900."),
-		FConsoleCommandWithArgsDelegate::CreateStatic(&MaxNodesCommand));
-
-	static FAutoConsoleCommand NodeDensityConsoleCommand(
-		TEXT("sd.SearchDebug.NodeDensity"),
-		TEXT("Set secondary search visible node density. Usage: sd.SearchDebug.NodeDensity 900."),
-		FConsoleCommandWithArgsDelegate::CreateStatic(&NodeDensityCommand));
-
-	static FAutoConsoleCommand CellSizeConsoleCommand(
-		TEXT("sd.SearchDebug.CellSize"),
-		TEXT("Set secondary search sampled grid cell size. Usage: sd.SearchDebug.CellSize 100."),
-		FConsoleCommandWithArgsDelegate::CreateStatic(&CellSizeCommand));
-
-	static FAutoConsoleCommand NodeScaleConsoleCommand(
-		TEXT("sd.SearchDebug.NodeScale"),
-		TEXT("Set secondary search visual node scale. Usage: sd.SearchDebug.NodeScale 0.45."),
-		FConsoleCommandWithArgsDelegate::CreateStatic(&NodeScaleCommand));
-
-	static FAutoConsoleCommand StyleConsoleCommand(
-		TEXT("sd.SearchDebug.Style"),
-		TEXT("Set secondary search visual style. Usage: sd.SearchDebug.Style Simple or Fluid."),
-		FConsoleCommandWithArgsDelegate::CreateStatic(&StyleCommand));
-
-	static FAutoConsoleCommand SpeedConsoleCommand(
-		TEXT("sd.SearchDebug.Speed"),
-		TEXT("Set secondary search animation speed. Usage: sd.SearchDebug.Speed 1.0."),
-		FConsoleCommandWithArgsDelegate::CreateStatic(&SpeedCommand));
-
-	static FAutoConsoleCommand TrailsConsoleCommand(
-		TEXT("sd.SearchDebug.Trails"),
-		TEXT("Set secondary search path history trails. Usage: sd.SearchDebug.Trails 0 or 1."),
-		FConsoleCommandWithArgsDelegate::CreateStatic(&TrailsCommand));
-
-	static FAutoConsoleCommand WaveSpeedConsoleCommand(
-		TEXT("sd.SearchDebug.WaveSpeed"),
-		TEXT("Set secondary search path wave speed. Usage: sd.SearchDebug.WaveSpeed 1.0."),
-		FConsoleCommandWithArgsDelegate::CreateStatic(&WaveSpeedCommand));
-
-	static FAutoConsoleCommand PathHistoryConsoleCommand(
-		TEXT("sd.SearchDebug.PathHistory"),
-		TEXT("Set secondary search retained path count. Usage: sd.SearchDebug.PathHistory 3."),
-		FConsoleCommandWithArgsDelegate::CreateStatic(&PathHistoryCommand));
+	static FAutoConsoleCommand ToggleConsoleCommand(TEXT("sd.SearchDebug.Toggle"), TEXT("Toggle secondary search debug drawing."), FConsoleCommandDelegate::CreateStatic(&ToggleCommand));
+	static FAutoConsoleCommand ModeConsoleCommand(TEXT("sd.SearchDebug.Mode"), TEXT("Usage: sd.SearchDebug.Mode BFS, UCS, or AStar."), FConsoleCommandWithArgsDelegate::CreateStatic(&ModeCommand));
+	static FAutoConsoleCommand ClearConsoleCommand(TEXT("sd.SearchDebug.Clear"), TEXT("Clear secondary search debug drawing."), FConsoleCommandDelegate::CreateStatic(&ClearCommand));
+	static FAutoConsoleCommand XRayConsoleCommand(TEXT("sd.SearchDebug.XRay"), TEXT("Usage: sd.SearchDebug.XRay 0 or 1."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { BoolCommand(Args, bXRayEnabled, TEXT("Secondary search XRay")); }));
+	static FAutoConsoleCommand MaxNodesConsoleCommand(TEXT("sd.SearchDebug.MaxNodes"), TEXT("Usage: sd.SearchDebug.MaxNodes 2600."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { IntCommand(Args, MaxDebugNodes, 128, 6000, TEXT("Secondary search max nodes")); }));
+	static FAutoConsoleCommand NodeDensityConsoleCommand(TEXT("sd.SearchDebug.NodeDensity"), TEXT("Usage: sd.SearchDebug.NodeDensity 2600."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { IntCommand(Args, MaxDebugNodes, 128, 6000, TEXT("Secondary search node density")); }));
+	static FAutoConsoleCommand CellSizeConsoleCommand(TEXT("sd.SearchDebug.CellSize"), TEXT("Usage: sd.SearchDebug.CellSize 55."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, CellSize, 35.0f, 200.0f, TEXT("Secondary search cell size")); }));
+	static FAutoConsoleCommand NodeScaleConsoleCommand(TEXT("sd.SearchDebug.NodeScale"), TEXT("Usage: sd.SearchDebug.NodeScale 0.35."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, NodeScale, 0.2f, 1.25f, TEXT("Secondary search node scale")); }));
+	static FAutoConsoleCommand ShowBaseGridConsoleCommand(TEXT("sd.SearchDebug.ShowBaseGrid"), TEXT("Usage: sd.SearchDebug.ShowBaseGrid 1."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { BoolCommand(Args, bShowBaseGrid, TEXT("Secondary search base grid")); }));
+	static FAutoConsoleCommand FieldRadiusConsoleCommand(TEXT("sd.SearchDebug.FieldRadius"), TEXT("Usage: sd.SearchDebug.FieldRadius 4000."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, FieldRadius, 1000.0f, 8000.0f, TEXT("Secondary search field radius")); }));
+	static FAutoConsoleCommand TargetSmoothingConsoleCommand(TEXT("sd.SearchDebug.TargetSmoothing"), TEXT("Usage: sd.SearchDebug.TargetSmoothing 18."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, TargetSmoothing, 1.0f, 40.0f, TEXT("Secondary search target smoothing")); }));
+	static FAutoConsoleCommand StyleConsoleCommand(TEXT("sd.SearchDebug.Style"), TEXT("Usage: sd.SearchDebug.Style Simple or Fluid."), FConsoleCommandWithArgsDelegate::CreateStatic(&StyleCommand));
+	static FAutoConsoleCommand SpeedConsoleCommand(TEXT("sd.SearchDebug.Speed"), TEXT("Usage: sd.SearchDebug.Speed 1.0."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, VisualSpeed, 0.1f, 5.0f, TEXT("Secondary search visual speed")); }));
+	static FAutoConsoleCommand TrailsConsoleCommand(TEXT("sd.SearchDebug.Trails"), TEXT("Usage: sd.SearchDebug.Trails 0 or 1."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { BoolCommand(Args, bTrailsEnabled, TEXT("Secondary search trails")); }));
+	static FAutoConsoleCommand WaveSpeedConsoleCommand(TEXT("sd.SearchDebug.WaveSpeed"), TEXT("Usage: sd.SearchDebug.WaveSpeed 1.0."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, WaveSpeed, 0.1f, 5.0f, TEXT("Secondary search wave speed")); }));
+	static FAutoConsoleCommand PathHistoryConsoleCommand(TEXT("sd.SearchDebug.PathHistory"), TEXT("Usage: sd.SearchDebug.PathHistory 3."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { IntCommand(Args, PathHistoryCount, 1, 8, TEXT("Secondary search path history")); }));
+	static FAutoConsoleCommand NodePulseConsoleCommand(TEXT("sd.SearchDebug.NodePulse"), TEXT("Usage: sd.SearchDebug.NodePulse 1.0."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, NodePulse, 0.0f, 3.0f, TEXT("Secondary search node pulse")); }));
+	static FAutoConsoleCommand NodeFadeTimeConsoleCommand(TEXT("sd.SearchDebug.NodeFadeTime"), TEXT("Usage: sd.SearchDebug.NodeFadeTime 1.2."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, NodeFadeTime, 0.2f, 5.0f, TEXT("Secondary search node fade time")); }));
+	static FAutoConsoleCommand PathFadeTimeConsoleCommand(TEXT("sd.SearchDebug.PathFadeTime"), TEXT("Usage: sd.SearchDebug.PathFadeTime 4.0."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, PathFadeTime, 0.5f, 10.0f, TEXT("Secondary search path fade time")); }));
+	static FAutoConsoleCommand LastPathFallbackConsoleCommand(TEXT("sd.SearchDebug.LastPathFallback"), TEXT("Usage: sd.SearchDebug.LastPathFallback 1."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { BoolCommand(Args, bLastPathFallback, TEXT("Secondary search last path fallback")); }));
+	static FAutoConsoleCommand QualityConsoleCommand(TEXT("sd.SearchDebug.Quality"), TEXT("Usage: sd.SearchDebug.Quality Low, Medium, or High."), FConsoleCommandWithArgsDelegate::CreateStatic(&QualityCommand));
+	static FAutoConsoleCommand GlowConsoleCommand(TEXT("sd.SearchDebug.Glow"), TEXT("Usage: sd.SearchDebug.Glow 1.0."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, GlowIntensity, 0.0f, 3.0f, TEXT("Secondary search glow")); }));
+	static FAutoConsoleCommand FlowBandConsoleCommand(TEXT("sd.SearchDebug.FlowBand"), TEXT("Usage: sd.SearchDebug.FlowBand 0.18."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, FlowBandWidth, 0.05f, 0.5f, TEXT("Secondary search flow band")); }));
+	static FAutoConsoleCommand NodeSoftnessConsoleCommand(TEXT("sd.SearchDebug.NodeSoftness"), TEXT("Usage: sd.SearchDebug.NodeSoftness 0.75."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, NodeSoftness, 0.1f, 1.0f, TEXT("Secondary search node softness")); }));
 }
 #endif
 }
@@ -462,243 +419,27 @@ FSecondarySearchResult FSecondarySearchSolver::FindPath(
 	ESecondarySearchMode Mode,
 	const FSecondarySearchSettings& Settings)
 {
-	FSecondarySearchResult Result;
-	Result.Mode = Mode;
-	Result.StartLocation = Start;
-	Result.GoalLocation = Goal;
-	Result.DebugStartSeconds = World ? World->GetTimeSeconds() : 0.0f;
-	Result.SearchGeneration = NextSearchGeneration();
-	Result.VisualizationRevision++;
-
-	const double StartSeconds = FPlatformTime::Seconds();
-
-	if (!World)
+	FSecondarySearchTask Task;
+	Task.Start(World, Start, Goal, Mode, Settings);
+	while (Task.IsActive())
 	{
-		Result.FailureReason = TEXT("Invalid world.");
-		return Result;
+		Task.Step(World, Settings, Settings.MaxExpandedNodes);
 	}
-
-	UNavigationSystemV1* NavSystem = FNavigationSystem::GetCurrent<UNavigationSystemV1>(World);
-	if (!NavSystem)
-	{
-		Result.FailureReason = TEXT("Navigation system is not available.");
-		return Result;
-	}
-
-	FNavLocation ProjectedStart;
-	FNavLocation ProjectedGoal;
-	if (!NavSystem->ProjectPointToNavigation(Start, ProjectedStart, Settings.ProjectionExtent))
-	{
-		Result.FailureReason = TEXT("Start point is not on navigation.");
-		return Result;
-	}
-
-	if (!NavSystem->ProjectPointToNavigation(Goal, ProjectedGoal, Settings.ProjectionExtent))
-	{
-		Result.FailureReason = TEXT("Goal point is not on navigation.");
-		return Result;
-	}
-
-	Result.StartLocation = ProjectedStart.Location;
-	Result.GoalLocation = ProjectedGoal.Location;
-
-	const FVector Origin = Result.StartLocation;
-	const FIntPoint StartKey(0, 0);
-	const FIntPoint GoalKey = WorldToGrid(Result.GoalLocation, Origin, Settings.CellSize);
-
-	TMap<FIntPoint, FVector> ProjectedCache;
-	ProjectedCache.Add(StartKey, Result.StartLocation);
-	ProjectedCache.Add(GoalKey, Result.GoalLocation);
-
-	TMap<FIntPoint, FSecondarySearchNodeRecord> Records;
-	Records.Add(StartKey, FSecondarySearchNodeRecord());
-
-	TSet<FIntPoint> ClosedSet;
-	TArray<FIntPoint> NeighborOffsets;
-	AddNeighborOffsets(Settings.bAllowDiagonal, NeighborOffsets);
-
-	bool bReachedGoal = false;
-	FIntPoint EndKey = StartKey;
-
-	if (IsGoalReached(Result.StartLocation, Result.GoalLocation, Settings))
-	{
-		bReachedGoal = true;
-	}
-	else if (Mode == ESecondarySearchMode::BFS)
-	{
-		TArray<FIntPoint> Queue;
-		Queue.Add(StartKey);
-		int32 QueueHead = 0;
-
-		while (QueueHead < Queue.Num() && Result.ExpandedCount < Settings.MaxExpandedNodes)
-		{
-			const FIntPoint CurrentKey = Queue[QueueHead++];
-			if (ClosedSet.Contains(CurrentKey))
-			{
-				continue;
-			}
-
-			FVector CurrentLocation;
-			if (!GetProjectedPoint(World, NavSystem, CurrentKey, Origin, Settings, ProjectedCache, CurrentLocation))
-			{
-				continue;
-			}
-
-			ClosedSet.Add(CurrentKey);
-			Result.ExpandedNodes.Add(CurrentLocation);
-			AddVisualEvent(Result, ESecondarySearchVisualEventType::NodeExpanded, CurrentLocation, FVector::ZeroVector, Records.FindChecked(CurrentKey).Cost);
-			Result.ExpandedCount++;
-
-			if (IsGoalReached(CurrentLocation, Result.GoalLocation, Settings))
-			{
-				EndKey = CurrentKey;
-				bReachedGoal = true;
-				break;
-			}
-
-			for (const FIntPoint& Offset : NeighborOffsets)
-			{
-				const FIntPoint NextKey = AddGridOffset(CurrentKey, Offset);
-				if (Records.Contains(NextKey) || ClosedSet.Contains(NextKey))
-				{
-					continue;
-				}
-
-				FVector NextLocation;
-				if (!GetProjectedPoint(World, NavSystem, NextKey, Origin, Settings, ProjectedCache, NextLocation))
-				{
-					continue;
-				}
-
-				if (!HasClearSegment(World, CurrentLocation, NextLocation))
-				{
-					continue;
-				}
-
-				FSecondarySearchNodeRecord NextRecord;
-				NextRecord.CameFrom = CurrentKey;
-				NextRecord.Cost = Records.FindChecked(CurrentKey).Cost + 1.0f;
-				NextRecord.bHasCameFrom = true;
-				Records.Add(NextKey, NextRecord);
-				Queue.Add(NextKey);
-				Result.FrontierNodes.Add(NextLocation);
-				AddVisualEvent(Result, ESecondarySearchVisualEventType::NodeDiscovered, NextLocation, FVector::ZeroVector, NextRecord.Cost);
-			}
-		}
-	}
-	else
-	{
-		TArray<FSecondarySearchOpenItem> OpenSet;
-		OpenSet.Add({ StartKey, 0.0f });
-
-		while (OpenSet.Num() > 0 && Result.ExpandedCount < Settings.MaxExpandedNodes)
-		{
-			int32 BestIndex = 0;
-			float BestPriority = OpenSet[0].Priority;
-			for (int32 Index = 1; Index < OpenSet.Num(); ++Index)
-			{
-				if (OpenSet[Index].Priority < BestPriority)
-				{
-					BestPriority = OpenSet[Index].Priority;
-					BestIndex = Index;
-				}
-			}
-
-			const FIntPoint CurrentKey = OpenSet[BestIndex].Key;
-			OpenSet.RemoveAtSwap(BestIndex, 1, EAllowShrinking::No);
-
-			if (ClosedSet.Contains(CurrentKey))
-			{
-				continue;
-			}
-
-			FVector CurrentLocation;
-			if (!GetProjectedPoint(World, NavSystem, CurrentKey, Origin, Settings, ProjectedCache, CurrentLocation))
-			{
-				continue;
-			}
-
-			ClosedSet.Add(CurrentKey);
-			Result.ExpandedNodes.Add(CurrentLocation);
-			AddVisualEvent(Result, ESecondarySearchVisualEventType::NodeExpanded, CurrentLocation, FVector::ZeroVector, Records.FindChecked(CurrentKey).Cost);
-			Result.ExpandedCount++;
-
-			if (IsGoalReached(CurrentLocation, Result.GoalLocation, Settings))
-			{
-				EndKey = CurrentKey;
-				bReachedGoal = true;
-				break;
-			}
-
-			const float CurrentCost = Records[CurrentKey].Cost;
-			for (const FIntPoint& Offset : NeighborOffsets)
-			{
-				const FIntPoint NextKey = AddGridOffset(CurrentKey, Offset);
-				if (ClosedSet.Contains(NextKey))
-				{
-					continue;
-				}
-
-				FVector NextLocation;
-				if (!GetProjectedPoint(World, NavSystem, NextKey, Origin, Settings, ProjectedCache, NextLocation))
-				{
-					continue;
-				}
-
-				if (!HasClearSegment(World, CurrentLocation, NextLocation))
-				{
-					continue;
-				}
-
-				const float StepCost = FMath::Max(FVector::Dist2D(CurrentLocation, NextLocation), KINDA_SMALL_NUMBER);
-				const float NewCost = CurrentCost + StepCost;
-				FSecondarySearchNodeRecord* ExistingRecord = Records.Find(NextKey);
-				if (!ExistingRecord || NewCost < ExistingRecord->Cost)
-				{
-					FSecondarySearchNodeRecord NextRecord;
-					NextRecord.CameFrom = CurrentKey;
-					NextRecord.Cost = NewCost;
-					NextRecord.bHasCameFrom = true;
-					Records.Add(NextKey, NextRecord);
-					OpenSet.Add({ NextKey, NewCost });
-					Result.FrontierNodes.Add(NextLocation);
-					AddVisualEvent(Result, ESecondarySearchVisualEventType::NodeDiscovered, NextLocation, FVector::ZeroVector, NextRecord.Cost);
-				}
-			}
-		}
-	}
-
-	if (bReachedGoal)
-	{
-		BuildPath(StartKey, EndKey, Records, ProjectedCache, Result);
-		AddPathVisualEvents(Result);
-		AddVisualEvent(Result, ESecondarySearchVisualEventType::SearchComplete, Result.GoalLocation);
-	}
-	else if (Result.ExpandedCount >= Settings.MaxExpandedNodes)
-	{
-		Result.FailureReason = FString::Printf(TEXT("Search reached max expanded node limit: %d."), Settings.MaxExpandedNodes);
-		AddVisualEvent(Result, ESecondarySearchVisualEventType::SearchFailed, Result.GoalLocation);
-	}
-	else
-	{
-		Result.FailureReason = TEXT("No path found.");
-		AddVisualEvent(Result, ESecondarySearchVisualEventType::SearchFailed, Result.GoalLocation);
-	}
-
-	Result.ElapsedMs = (FPlatformTime::Seconds() - StartSeconds) * 1000.0;
-	return Result;
+	return Task.BuildDebugResult();
 }
 
 void FSecondarySearchTask::Reset()
 {
 	Result = FSecondarySearchResult();
 	ProjectedCache.Reset();
+	RejectedProjectionCache.Reset();
 	Records.Reset();
 	ClosedSet.Reset();
 	NeighborOffsets.Reset();
 	Queue.Reset();
 	OpenSet.Reset();
 	QueueHead = 0;
+	OpenSequence = 0;
 	bActive = false;
 	bFinished = false;
 }
@@ -711,7 +452,6 @@ void FSecondarySearchTask::Start(
 	const FSecondarySearchSettings& Settings)
 {
 	Reset();
-
 	Mode = InMode;
 	Result.Mode = InMode;
 	Result.StartLocation = Start;
@@ -720,18 +460,16 @@ void FSecondarySearchTask::Start(
 	Result.SearchGeneration = NextSearchGeneration();
 	Result.VisualizationRevision++;
 
-	const double StartSeconds = FPlatformTime::Seconds();
-
 	if (!World)
 	{
-		Finish(false, TEXT("Invalid world."));
+		Finish(false, TEXT("Invalid world."), Settings);
 		return;
 	}
 
 	UNavigationSystemV1* NavSystem = FNavigationSystem::GetCurrent<UNavigationSystemV1>(World);
 	if (!NavSystem)
 	{
-		Finish(false, TEXT("Navigation system is not available."));
+		Finish(false, TEXT("Navigation system is not available."), Settings);
 		return;
 	}
 
@@ -739,13 +477,12 @@ void FSecondarySearchTask::Start(
 	FNavLocation ProjectedGoal;
 	if (!NavSystem->ProjectPointToNavigation(Start, ProjectedStart, Settings.ProjectionExtent))
 	{
-		Finish(false, TEXT("Start point is not on navigation."));
+		Finish(false, TEXT("Start point is not on navigation."), Settings);
 		return;
 	}
-
 	if (!NavSystem->ProjectPointToNavigation(Goal, ProjectedGoal, Settings.ProjectionExtent))
 	{
-		Finish(false, TEXT("Goal point is not on navigation."));
+		Finish(false, TEXT("Goal point is not on navigation."), Settings);
 		return;
 	}
 
@@ -761,10 +498,11 @@ void FSecondarySearchTask::Start(
 	Records.Add(StartKey, FSecondarySearchNodeRecord());
 	AddVisualEvent(Result, ESecondarySearchVisualEventType::NodeDiscovered, Result.StartLocation, FVector::ZeroVector, 0.0f);
 	AddNeighborOffsets(Settings.bAllowDiagonal, NeighborOffsets);
+	SyncSampledNodes(ProjectedCache, Settings, Result);
 
 	if (IsGoalReached(Result.StartLocation, Result.GoalLocation, Settings))
 	{
-		Finish(true, FString());
+		Finish(true, FString(), Settings);
 	}
 	else if (Mode == ESecondarySearchMode::BFS)
 	{
@@ -773,11 +511,9 @@ void FSecondarySearchTask::Start(
 	}
 	else
 	{
-		OpenSet.Add({ StartKey, 0.0f });
+		OpenSet.Add({ StartKey, GetSearchPriority(Mode, Result.StartLocation, Result.GoalLocation, 0.0f), OpenSequence++ });
 		bActive = true;
 	}
-
-	Result.ElapsedMs = (FPlatformTime::Seconds() - StartSeconds) * 1000.0;
 }
 
 void FSecondarySearchTask::Step(UWorld* World, const FSecondarySearchSettings& Settings, int32 MaxSteps)
@@ -788,10 +524,10 @@ void FSecondarySearchTask::Step(UWorld* World, const FSecondarySearchSettings& S
 	}
 
 	const double StartSeconds = FPlatformTime::Seconds();
-	UNavigationSystemV1* NavSystem = FNavigationSystem::GetCurrent<UNavigationSystemV1>(World);
+	UNavigationSystemV1* NavSystem = World ? FNavigationSystem::GetCurrent<UNavigationSystemV1>(World) : nullptr;
 	if (!World || !NavSystem)
 	{
-		Finish(false, TEXT("Navigation system is not available."));
+		Finish(false, TEXT("Navigation system is not available."), Settings);
 		return;
 	}
 
@@ -803,33 +539,20 @@ void FSecondarySearchTask::Step(UWorld* World, const FSecondarySearchSettings& S
 		{
 			if (QueueHead >= Queue.Num())
 			{
-				Finish(false, TEXT("No path found."));
+				Finish(false, TEXT("No path found."), Settings);
 				break;
 			}
-
 			CurrentKey = Queue[QueueHead++];
 		}
 		else
 		{
-			if (OpenSet.Num() == 0)
+			FSecondarySearchOpenItem CurrentItem;
+			if (!PopBestOpenItem(OpenSet, CurrentItem))
 			{
-				Finish(false, TEXT("No path found."));
+				Finish(false, TEXT("No path found."), Settings);
 				break;
 			}
-
-			int32 BestIndex = 0;
-			float BestPriority = OpenSet[0].Priority;
-			for (int32 Index = 1; Index < OpenSet.Num(); ++Index)
-			{
-				if (OpenSet[Index].Priority < BestPriority)
-				{
-					BestPriority = OpenSet[Index].Priority;
-					BestIndex = Index;
-				}
-			}
-
-			CurrentKey = OpenSet[BestIndex].Key;
-			OpenSet.RemoveAtSwap(BestIndex, 1, EAllowShrinking::No);
+			CurrentKey = CurrentItem.Key;
 		}
 
 		if (ClosedSet.Contains(CurrentKey))
@@ -838,7 +561,7 @@ void FSecondarySearchTask::Step(UWorld* World, const FSecondarySearchSettings& S
 		}
 
 		FVector CurrentLocation;
-		if (!GetProjectedPoint(World, NavSystem, CurrentKey, Origin, Settings, ProjectedCache, CurrentLocation))
+		if (!GetProjectedPoint(World, NavSystem, CurrentKey, Origin, Settings, ProjectedCache, RejectedProjectionCache, CurrentLocation))
 		{
 			continue;
 		}
@@ -853,7 +576,7 @@ void FSecondarySearchTask::Step(UWorld* World, const FSecondarySearchSettings& S
 		if (IsGoalReached(CurrentLocation, Result.GoalLocation, Settings))
 		{
 			EndKey = CurrentKey;
-			Finish(true, FString());
+			Finish(true, FString(), Settings);
 			break;
 		}
 
@@ -867,19 +590,16 @@ void FSecondarySearchTask::Step(UWorld* World, const FSecondarySearchSettings& S
 			}
 
 			FVector NextLocation;
-			if (!GetProjectedPoint(World, NavSystem, NextKey, Origin, Settings, ProjectedCache, NextLocation))
+			if (!GetProjectedPoint(World, NavSystem, NextKey, Origin, Settings, ProjectedCache, RejectedProjectionCache, NextLocation))
 			{
 				continue;
 			}
-
 			if (!HasClearSegment(World, CurrentLocation, NextLocation))
 			{
 				continue;
 			}
 
-			const float StepCost = Mode == ESecondarySearchMode::BFS
-				? 1.0f
-				: FMath::Max(FVector::Dist2D(CurrentLocation, NextLocation), KINDA_SMALL_NUMBER);
+			const float StepCost = Mode == ESecondarySearchMode::BFS ? 1.0f : FMath::Max(FVector::Dist2D(CurrentLocation, NextLocation), KINDA_SMALL_NUMBER);
 			const float NewCost = CurrentCost + StepCost;
 			FSecondarySearchNodeRecord* ExistingRecord = Records.Find(NextKey);
 			if (!ExistingRecord || NewCost < ExistingRecord->Cost)
@@ -896,7 +616,7 @@ void FSecondarySearchTask::Step(UWorld* World, const FSecondarySearchSettings& S
 				}
 				else
 				{
-					OpenSet.Add({ NextKey, NewCost });
+					OpenSet.Add({ NextKey, GetSearchPriority(Mode, NextLocation, Result.GoalLocation, NewCost), OpenSequence++ });
 				}
 
 				Result.FrontierNodes.Add(NextLocation);
@@ -908,9 +628,10 @@ void FSecondarySearchTask::Step(UWorld* World, const FSecondarySearchSettings& S
 
 	if (!bFinished && Result.ExpandedCount >= Settings.MaxExpandedNodes)
 	{
-		Finish(false, FString::Printf(TEXT("Search reached max expanded node limit: %d."), Settings.MaxExpandedNodes));
+		Finish(false, FString::Printf(TEXT("Search reached max expanded node limit: %d."), Settings.MaxExpandedNodes), Settings);
 	}
 
+	SyncSampledNodes(ProjectedCache, Settings, Result);
 	Result.ElapsedMs += (FPlatformTime::Seconds() - StartSeconds) * 1000.0;
 }
 
@@ -934,13 +655,14 @@ FSecondarySearchResult FSecondarySearchTask::BuildDebugResult() const
 	return Result;
 }
 
-void FSecondarySearchTask::Finish(bool bSuccess, const FString& FailureReason)
+void FSecondarySearchTask::Finish(bool bSuccess, const FString& FailureReason, const FSecondarySearchSettings& Settings)
 {
 	bActive = false;
 	bFinished = true;
 	Result.bSuccess = bSuccess;
 	Result.FailureReason = FailureReason;
 	Result.VisualizationRevision++;
+	SyncSampledNodes(ProjectedCache, Settings, Result);
 
 	if (bSuccess)
 	{
@@ -1007,7 +729,6 @@ bool FSecondarySearchDebug::ConsumeClearRequested()
 		return true;
 	}
 #endif
-
 	return false;
 }
 
@@ -1074,12 +795,84 @@ int32 FSecondarySearchDebug::GetPathHistoryCount()
 #endif
 }
 
+float FSecondarySearchDebug::GetNodePulse()
+{
+#if !UE_BUILD_SHIPPING
+	return SecondarySearchDebugState::NodePulse;
+#else
+	return 1.0f;
+#endif
+}
+
+float FSecondarySearchDebug::GetNodeFadeTime()
+{
+#if !UE_BUILD_SHIPPING
+	return SecondarySearchDebugState::NodeFadeTime;
+#else
+	return 1.2f;
+#endif
+}
+
+float FSecondarySearchDebug::GetPathFadeTime()
+{
+#if !UE_BUILD_SHIPPING
+	return SecondarySearchDebugState::PathFadeTime;
+#else
+	return 4.0f;
+#endif
+}
+
+bool FSecondarySearchDebug::ShouldUseLastPathFallback()
+{
+#if !UE_BUILD_SHIPPING
+	return SecondarySearchDebugState::bLastPathFallback;
+#else
+	return false;
+#endif
+}
+
+ESecondarySearchVisualQuality FSecondarySearchDebug::GetVisualQuality()
+{
+#if !UE_BUILD_SHIPPING
+	return SecondarySearchDebugState::VisualQuality;
+#else
+	return ESecondarySearchVisualQuality::Low;
+#endif
+}
+
+float FSecondarySearchDebug::GetGlowIntensity()
+{
+#if !UE_BUILD_SHIPPING
+	return SecondarySearchDebugState::GlowIntensity;
+#else
+	return 0.0f;
+#endif
+}
+
+float FSecondarySearchDebug::GetFlowBandWidth()
+{
+#if !UE_BUILD_SHIPPING
+	return SecondarySearchDebugState::FlowBandWidth;
+#else
+	return 0.18f;
+#endif
+}
+
+float FSecondarySearchDebug::GetNodeSoftness()
+{
+#if !UE_BUILD_SHIPPING
+	return SecondarySearchDebugState::NodeSoftness;
+#else
+	return 0.75f;
+#endif
+}
+
 float FSecondarySearchDebug::GetCellSize()
 {
 #if !UE_BUILD_SHIPPING
 	return SecondarySearchDebugState::CellSize;
 #else
-	return 100.0f;
+	return 55.0f;
 #endif
 }
 
@@ -1088,7 +881,7 @@ float FSecondarySearchDebug::GetNodeScale()
 #if !UE_BUILD_SHIPPING
 	return SecondarySearchDebugState::NodeScale;
 #else
-	return 0.45f;
+	return 0.35f;
 #endif
 }
 
@@ -1101,12 +894,60 @@ int32 FSecondarySearchDebug::GetNodeDensity()
 #endif
 }
 
+bool FSecondarySearchDebug::ShouldShowBaseGrid()
+{
+#if !UE_BUILD_SHIPPING
+	return SecondarySearchDebugState::bShowBaseGrid;
+#else
+	return false;
+#endif
+}
+
+float FSecondarySearchDebug::GetFieldRadius()
+{
+#if !UE_BUILD_SHIPPING
+	return SecondarySearchDebugState::FieldRadius;
+#else
+	return 4000.0f;
+#endif
+}
+
+float FSecondarySearchDebug::GetTargetSmoothing()
+{
+#if !UE_BUILD_SHIPPING
+	return SecondarySearchDebugState::TargetSmoothing;
+#else
+	return 18.0f;
+#endif
+}
+
 FString FSecondarySearchDebug::GetModeName(ESecondarySearchMode Mode)
 {
-	return Mode == ESecondarySearchMode::BFS ? TEXT("BFS") : TEXT("UCS");
+	if (Mode == ESecondarySearchMode::BFS)
+	{
+		return TEXT("BFS");
+	}
+	if (Mode == ESecondarySearchMode::AStar)
+	{
+		return TEXT("A*");
+	}
+	return TEXT("UCS");
 }
 
 FString FSecondarySearchDebug::GetVisualStyleName(ESecondarySearchVisualStyle Style)
 {
 	return Style == ESecondarySearchVisualStyle::Fluid ? TEXT("Fluid") : TEXT("Simple");
+}
+
+FString FSecondarySearchDebug::GetVisualQualityName(ESecondarySearchVisualQuality Quality)
+{
+	if (Quality == ESecondarySearchVisualQuality::Low)
+	{
+		return TEXT("Low");
+	}
+	if (Quality == ESecondarySearchVisualQuality::Medium)
+	{
+		return TEXT("Medium");
+	}
+	return TEXT("High");
 }

@@ -10,7 +10,6 @@ class UMaterialInstanceDynamic;
 class UMaterialInterface;
 class USplineMeshComponent;
 class UStaticMesh;
-class UTextRenderComponent;
 
 UCLASS(NotPlaceable, Transient)
 class SOUL_AND_DUNGEON_API ASecondarySearchVisualizerActor : public AActor
@@ -30,7 +29,17 @@ public:
 		bool bTrailsEnabled,
 		float WaveSpeed,
 		int32 PathHistoryCount,
-		float NodeScale);
+		float NodeScale,
+		bool bShowBaseGrid,
+		float TargetSmoothing,
+		float NodePulse,
+		float NodeFadeTime,
+		float PathFadeTime,
+		bool bLastPathFallback,
+		ESecondarySearchVisualQuality VisualQuality,
+		float GlowIntensity,
+		float FlowBandWidth,
+		float NodeSoftness);
 	void ClearVisualization();
 
 protected:
@@ -38,45 +47,37 @@ protected:
 	virtual void Tick(float DeltaSeconds) override;
 
 private:
-	void ConfigureComponent(UInstancedStaticMeshComponent* Component, UStaticMesh* Mesh) const;
-	void ApplyDepthPriority(bool bXRayEnabled);
-	void RebuildInstances(
-		const FSecondarySearchResult& Result,
-		const FSecondarySearchSettings& Settings,
-		int32 ExpandedDrawCount,
-		int32 FrontierDrawCount);
-	void AddWavePathLayer(const FSecondarySearchResult& Result, const FSecondarySearchSettings& Settings, float WorldSeconds, bool bTrailsEnabled, int32 PathHistoryCount);
-	void UpdateStatusText(const FSecondarySearchResult& Result, const FSecondarySearchSettings& Settings);
-	void UpdateFluidAnimation(float DeltaSeconds, float WorldSeconds);
-	void UpdateWavePathLayers(float DeltaSeconds, float WorldSeconds);
-	void UpdateTargetPulse(float WorldSeconds);
-	void ResetRetainedState();
-	void ClearWavePathLayers();
-	void ReleaseWavePathLayer(int32 LayerIndex);
-	void TrimWavePathHistory(int32 PathHistoryCount);
-
-	UMaterialInstanceDynamic* CreateColorMaterial(UMaterialInterface* ParentMaterial, const FLinearColor& Color, const FString& Name);
-	USplineMeshComponent* AcquirePathSpline();
-	void ReleasePathSpline(USplineMeshComponent* Spline);
-	void ConfigurePathSpline(USplineMeshComponent* Spline, UMaterialInterface* Material, float Radius, bool bWaveSpline) const;
-	void SetSplineSegment(USplineMeshComponent* Spline, const FVector& Start, const FVector& End, float Radius, bool bVisible) const;
-	FTransform MakeDiskTransform(const FVector& Location, float Radius, float Height, float ZOffset) const;
-	FTransform MakeSphereTransform(const FVector& Location, float Radius, float ZOffset) const;
-	FTransform MakeTubeTransform(const FVector& Start, const FVector& End, float Radius, float ZOffset) const;
-
-	struct FFluidNodeRecord
+	enum class ERetainedNodeVisualState : uint8
 	{
-		UInstancedStaticMeshComponent* Component = nullptr;
-		int32 InstanceIndex = INDEX_NONE;
-		FVector Location = FVector::ZeroVector;
-		float BaseRadius = 0.0f;
-		float Height = 0.0f;
-		float ZOffset = 0.0f;
-		float SpawnSeconds = 0.0f;
-		bool bFrontier = false;
+		Base,
+		Frontier,
+		Expanded,
+		PathTouched
 	};
 
-	struct FWavePathSegment
+	struct FRetainedNodeRecord
+	{
+		FVector Location = FVector::ZeroVector;
+		int32 BaseInstanceIndex = INDEX_NONE;
+		int32 ExpandedInstanceIndex = INDEX_NONE;
+		int32 FrontierInstanceIndex = INDEX_NONE;
+		float BaseRadius = 0.0f;
+		float BaseHeight = 0.0f;
+		float BaseZOffset = 0.0f;
+		float ExpandedRadius = 0.0f;
+		float FrontierRadius = 0.0f;
+		float ExpandedHeight = 0.0f;
+		float FrontierHeight = 0.0f;
+		float ExpandedZOffset = 0.0f;
+		float FrontierZOffset = 0.0f;
+		float StateChangeSeconds = 0.0f;
+		float LastTouchedSeconds = 0.0f;
+		int32 LastTouchedGeneration = -1;
+		int32 SequenceIndex = 0;
+		ERetainedNodeVisualState State = ERetainedNodeVisualState::Base;
+	};
+
+	struct FPathSegmentRecord
 	{
 		FVector Start = FVector::ZeroVector;
 		FVector End = FVector::ZeroVector;
@@ -87,7 +88,7 @@ private:
 		USplineMeshComponent* WakeSpline = nullptr;
 	};
 
-	struct FWavePathLayer
+	struct FPathLayer
 	{
 		int32 Generation = 0;
 		float CreatedSeconds = 0.0f;
@@ -95,14 +96,59 @@ private:
 		float WaveDistance = 0.0f;
 		float TotalDistance = 0.0f;
 		bool bWaveComplete = false;
-		TArray<FWavePathSegment> Segments;
+		bool bPreview = false;
+		TArray<FPathSegmentRecord> Segments;
 		UMaterialInstanceDynamic* BaseMaterial = nullptr;
 		UMaterialInstanceDynamic* WaveMaterial = nullptr;
 		UMaterialInstanceDynamic* WakeMaterial = nullptr;
 	};
 
+	void ConfigureComponent(UInstancedStaticMeshComponent* Component, UStaticMesh* Mesh) const;
+	void ApplyDepthPriority(bool bXRayEnabled);
+	void UpdateBaseGridInstances(const FSecondarySearchResult& Result, const FSecondarySearchSettings& Settings, int32 NodeCap);
+	void UpdateRetainedNodeInstances(const FSecondarySearchResult& Result, const FSecondarySearchSettings& Settings, int32 NodeCap, float WorldSeconds);
+	void UpdateEndpointMarkers(const FSecondarySearchResult& Result, const FSecondarySearchSettings& Settings);
+	void UpdateSimplePathInstances(const FSecondarySearchResult& Result, const FSecondarySearchSettings& Settings);
+	void UpdatePreviewPathInstances(const FSecondarySearchResult& Result, const FSecondarySearchSettings& Settings, float WorldSeconds);
+	void UpdateStatusHud(const FSecondarySearchResult& Result) const;
+	void UpdateFluidAnimation(float DeltaSeconds, float WorldSeconds);
+	void UpdatePathLayers(float DeltaSeconds, float WorldSeconds);
+	void UpdateTargetPulse(float DeltaSeconds, float WorldSeconds);
+	void ResetRetainedState();
+	void ClearPathLayers();
+	void ReleasePathLayer(FPathLayer& Layer);
+	void TrimPathHistory(int32 PathHistoryCount);
+	void AddPathLayer(
+		const TArray<FVector>& Path,
+		int32 Generation,
+		const FSecondarySearchSettings& Settings,
+		float WorldSeconds,
+		bool bPreview);
+
+	UMaterialInstanceDynamic* CreateColorMaterial(UMaterialInterface* ParentMaterial, const FLinearColor& Color, const FString& Name);
+	USplineMeshComponent* AcquirePathSpline();
+	void ReleasePathSpline(USplineMeshComponent* Spline);
+	void ConfigurePathSpline(USplineMeshComponent* Spline, UMaterialInterface* Material, float Radius) const;
+	void SetSplineSegment(USplineMeshComponent* Spline, const FVector& Start, const FVector& End, float Radius, bool bVisible) const;
+	FTransform MakeDiskTransform(const FVector& Location, float Radius, float Height, float ZOffset) const;
+	FTransform MakeSphereTransform(const FVector& Location, float Radius, float ZOffset) const;
+	FTransform MakeTubeTransform(const FVector& Start, const FVector& End, float Radius, float ZOffset) const;
+	FTransform MakeHiddenTransform() const;
+	int32 AddWorldInstance(UInstancedStaticMeshComponent* Component, const FTransform& WorldTransform) const;
+	FIntPoint MakeNodeKey(const FVector& Location, float CellSize) const;
+	FIntPoint FindRetainedNodeKeyNear(const FVector& Location, float CellSize) const;
+	bool ArePathsEquivalent(const TArray<FVector>& A, const TArray<FVector>& B) const;
+	float SmoothStep01(float Value) const;
+	float EaseOutCubic(float Value) const;
+	float EaseInOutSine(float Value) const;
+	float GetQualityScale() const;
+	bool ShouldAnimateRetainedNode(const FRetainedNodeRecord& Record, float WorldSeconds) const;
+
 	UPROPERTY()
 	TObjectPtr<USceneComponent> SceneRoot;
+
+	UPROPERTY()
+	TObjectPtr<UInstancedStaticMeshComponent> BaseGridNodes;
 
 	UPROPERTY()
 	TObjectPtr<UInstancedStaticMeshComponent> ExpandedNodes;
@@ -123,13 +169,13 @@ private:
 	TObjectPtr<UInstancedStaticMeshComponent> PathSegments;
 
 	UPROPERTY()
+	TObjectPtr<UInstancedStaticMeshComponent> PreviewPathSegments;
+
+	UPROPERTY()
 	TArray<TObjectPtr<USplineMeshComponent>> PathSplinePool;
 
 	UPROPERTY()
 	TArray<TObjectPtr<USplineMeshComponent>> FreePathSplines;
-
-	UPROPERTY()
-	TObjectPtr<UTextRenderComponent> StatusText;
 
 	UPROPERTY()
 	TObjectPtr<UStaticMesh> CylinderMesh;
@@ -142,6 +188,9 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UMaterialInterface> PathBaseMaterial;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> BaseGridMaterial;
 
 	UPROPERTY()
 	TObjectPtr<UMaterialInstanceDynamic> ExpandedMaterial;
@@ -162,28 +211,49 @@ private:
 	TObjectPtr<UMaterialInstanceDynamic> PathMaterial;
 
 	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> PreviewPathMaterial;
+
+	UPROPERTY()
 	TArray<TObjectPtr<UMaterialInstanceDynamic>> PathLayerMaterials;
 
-	int32 AddWorldInstance(UInstancedStaticMeshComponent* Component, const FTransform& WorldTransform) const;
+	TMap<FIntPoint, FRetainedNodeRecord> RetainedNodes;
+	TArray<FIntPoint> RetainedNodeKeys;
+	TArray<FPathLayer> PathLayers;
+	TArray<FVector> LastSuccessfulPath;
+	TArray<FVector> LastPreviewPath;
+	TArray<FVector> LastSampledNodes;
 
-	FVector CachedTargetLocation = FVector::ZeroVector;
+	FVector SmoothedTargetLocation = FVector::ZeroVector;
+	bool bHasSmoothedTargetLocation = false;
 	bool bHasTargetLocation = false;
 	bool bLastXRayEnabled = true;
 	bool bLastTrailsEnabled = true;
+	bool bLastShowBaseGrid = true;
+	bool bCachedLastPathFallback = true;
 	ESecondarySearchVisualStyle LastVisualStyle = ESecondarySearchVisualStyle::Fluid;
+	ESecondarySearchVisualQuality CachedVisualQuality = ESecondarySearchVisualQuality::High;
 	float CachedVisualSpeed = 1.0f;
 	float CachedWaveSpeed = 1.0f;
 	float CachedNodeScale = 0.45f;
 	float CachedTargetRadius = 44.0f;
 	float CachedPathRevealSpeed = 1100.0f;
-	float LastNodeBuildSeconds = 0.0f;
+	float CachedNodePulse = 1.0f;
+	float CachedNodeFadeTime = 1.2f;
+	float CachedPathFadeTime = 4.0f;
+	float CachedGlowIntensity = 1.0f;
+	float CachedFlowBandWidth = 0.18f;
+	float CachedNodeSoftness = 0.75f;
+	float CachedTargetSmoothing = 18.0f;
+	float CachedTargetZOffset = 80.0f;
+	float LastNodeUpdateSeconds = 0.0f;
 	int32 LastVisualizationRevision = -1;
 	int32 LastSearchGeneration = -1;
 	int32 LastPathLayerGeneration = -1;
-	int32 LastExpandedDrawCount = -1;
-	int32 LastFrontierDrawCount = -1;
+	int32 LastPreviewLayerGeneration = -1;
+	int32 LastSampledDrawCount = -1;
+	int32 LastMaxVisibleNodes = -1;
 	int32 LastPathPointCount = -1;
+	int32 LastPreviewPathPointCount = -1;
 	float LastNodeScale = -1.0f;
-	TArray<FFluidNodeRecord> FluidNodeRecords;
-	TArray<FWavePathLayer> WavePathLayers;
+	float LastCellSize = -1.0f;
 };
