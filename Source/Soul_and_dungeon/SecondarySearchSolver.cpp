@@ -102,6 +102,30 @@ static float GetSearchPriority(ESecondarySearchMode Mode, const FVector& Locatio
 	return Mode == ESecondarySearchMode::AStar ? CostSoFar + FVector::Dist2D(Location, Goal) : CostSoFar;
 }
 
+static bool HasHigherOpenPriority(const FSecondarySearchOpenItem& A, const FSecondarySearchOpenItem& B)
+{
+	if (!FMath::IsNearlyEqual(A.Priority, B.Priority))
+	{
+		return A.Priority < B.Priority;
+	}
+	return A.TieBreaker < B.TieBreaker;
+}
+
+static void PushOpenItem(TArray<FSecondarySearchOpenItem>& OpenSet, const FSecondarySearchOpenItem& Item)
+{
+	int32 Index = OpenSet.Add(Item);
+	while (Index > 0)
+	{
+		const int32 ParentIndex = (Index - 1) / 2;
+		if (!HasHigherOpenPriority(OpenSet[Index], OpenSet[ParentIndex]))
+		{
+			break;
+		}
+		OpenSet.Swap(Index, ParentIndex);
+		Index = ParentIndex;
+	}
+}
+
 static bool PopBestOpenItem(TArray<FSecondarySearchOpenItem>& OpenSet, FSecondarySearchOpenItem& OutItem)
 {
 	if (OpenSet.Num() == 0)
@@ -109,23 +133,37 @@ static bool PopBestOpenItem(TArray<FSecondarySearchOpenItem>& OpenSet, FSecondar
 		return false;
 	}
 
-	int32 BestIndex = 0;
-	float BestPriority = OpenSet[0].Priority;
-	int32 BestTieBreaker = OpenSet[0].TieBreaker;
-	for (int32 Index = 1; Index < OpenSet.Num(); ++Index)
+	OutItem = OpenSet[0];
+	const FSecondarySearchOpenItem LastItem = OpenSet.Pop(EAllowShrinking::No);
+	if (OpenSet.Num() == 0)
 	{
-		const FSecondarySearchOpenItem& Candidate = OpenSet[Index];
-		if (Candidate.Priority < BestPriority ||
-			(FMath::IsNearlyEqual(Candidate.Priority, BestPriority) && Candidate.TieBreaker < BestTieBreaker))
-		{
-			BestPriority = Candidate.Priority;
-			BestTieBreaker = Candidate.TieBreaker;
-			BestIndex = Index;
-		}
+		return true;
 	}
 
-	OutItem = OpenSet[BestIndex];
-	OpenSet.RemoveAtSwap(BestIndex, 1, EAllowShrinking::No);
+	OpenSet[0] = LastItem;
+	int32 Index = 0;
+	while (true)
+	{
+		const int32 LeftChildIndex = Index * 2 + 1;
+		const int32 RightChildIndex = LeftChildIndex + 1;
+		int32 BestChildIndex = Index;
+
+		if (OpenSet.IsValidIndex(LeftChildIndex) && HasHigherOpenPriority(OpenSet[LeftChildIndex], OpenSet[BestChildIndex]))
+		{
+			BestChildIndex = LeftChildIndex;
+		}
+		if (OpenSet.IsValidIndex(RightChildIndex) && HasHigherOpenPriority(OpenSet[RightChildIndex], OpenSet[BestChildIndex]))
+		{
+			BestChildIndex = RightChildIndex;
+		}
+		if (BestChildIndex == Index)
+		{
+			break;
+		}
+
+		OpenSet.Swap(Index, BestChildIndex);
+		Index = BestChildIndex;
+	}
 	return true;
 }
 
@@ -237,7 +275,7 @@ namespace SecondarySearchDebugState
 	static ESecondarySearchVisualStyle VisualStyle = ESecondarySearchVisualStyle::Fluid;
 	static ESecondarySearchVisualQuality VisualQuality = ESecondarySearchVisualQuality::High;
 	static int32 Revision = 0;
-	static int32 MaxDebugNodes = 4200;
+	static int32 MaxDebugNodes = 12000;
 	static int32 PathHistoryCount = 3;
 	static float VisualSpeed = 1.0f;
 	static float WaveSpeed = 1.0f;
@@ -247,8 +285,8 @@ namespace SecondarySearchDebugState
 	static float GlowIntensity = 1.0f;
 	static float FlowBandWidth = 0.18f;
 	static float NodeSoftness = 0.75f;
-	static float CellSize = 45.0f;
-	static float NodeScale = 0.35f;
+	static float CellSize = 28.0f;
+	static float NodeScale = 0.24f;
 	static float FieldRadius = 4000.0f;
 	static float TargetSmoothing = 18.0f;
 
@@ -388,10 +426,10 @@ namespace SecondarySearchDebugState
 	static FAutoConsoleCommand ModeConsoleCommand(TEXT("sd.SearchDebug.Mode"), TEXT("Usage: sd.SearchDebug.Mode BFS, UCS, or AStar."), FConsoleCommandWithArgsDelegate::CreateStatic(&ModeCommand));
 	static FAutoConsoleCommand ClearConsoleCommand(TEXT("sd.SearchDebug.Clear"), TEXT("Clear secondary search debug drawing."), FConsoleCommandDelegate::CreateStatic(&ClearCommand));
 	static FAutoConsoleCommand XRayConsoleCommand(TEXT("sd.SearchDebug.XRay"), TEXT("Usage: sd.SearchDebug.XRay 0 or 1."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { BoolCommand(Args, bXRayEnabled, TEXT("Secondary search XRay")); }));
-	static FAutoConsoleCommand MaxNodesConsoleCommand(TEXT("sd.SearchDebug.MaxNodes"), TEXT("Usage: sd.SearchDebug.MaxNodes 4200."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { IntCommand(Args, MaxDebugNodes, 128, 9000, TEXT("Secondary search max nodes")); }));
-	static FAutoConsoleCommand NodeDensityConsoleCommand(TEXT("sd.SearchDebug.NodeDensity"), TEXT("Usage: sd.SearchDebug.NodeDensity 4200."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { IntCommand(Args, MaxDebugNodes, 128, 9000, TEXT("Secondary search node density")); }));
-	static FAutoConsoleCommand CellSizeConsoleCommand(TEXT("sd.SearchDebug.CellSize"), TEXT("Usage: sd.SearchDebug.CellSize 45."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, CellSize, 30.0f, 200.0f, TEXT("Secondary search cell size")); }));
-	static FAutoConsoleCommand NodeScaleConsoleCommand(TEXT("sd.SearchDebug.NodeScale"), TEXT("Usage: sd.SearchDebug.NodeScale 0.35."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, NodeScale, 0.2f, 1.25f, TEXT("Secondary search node scale")); }));
+	static FAutoConsoleCommand MaxNodesConsoleCommand(TEXT("sd.SearchDebug.MaxNodes"), TEXT("Usage: sd.SearchDebug.MaxNodes 12000."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { IntCommand(Args, MaxDebugNodes, 128, 16000, TEXT("Secondary search max nodes")); }));
+	static FAutoConsoleCommand NodeDensityConsoleCommand(TEXT("sd.SearchDebug.NodeDensity"), TEXT("Usage: sd.SearchDebug.NodeDensity 12000."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { IntCommand(Args, MaxDebugNodes, 128, 16000, TEXT("Secondary search node density")); }));
+	static FAutoConsoleCommand CellSizeConsoleCommand(TEXT("sd.SearchDebug.CellSize"), TEXT("Usage: sd.SearchDebug.CellSize 28."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, CellSize, 20.0f, 200.0f, TEXT("Secondary search cell size")); }));
+	static FAutoConsoleCommand NodeScaleConsoleCommand(TEXT("sd.SearchDebug.NodeScale"), TEXT("Usage: sd.SearchDebug.NodeScale 0.24."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, NodeScale, 0.12f, 1.25f, TEXT("Secondary search node scale")); }));
 	static FAutoConsoleCommand ShowBaseGridConsoleCommand(TEXT("sd.SearchDebug.ShowBaseGrid"), TEXT("Usage: sd.SearchDebug.ShowBaseGrid 1."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { BoolCommand(Args, bShowBaseGrid, TEXT("Secondary search base grid")); }));
 	static FAutoConsoleCommand FieldRadiusConsoleCommand(TEXT("sd.SearchDebug.FieldRadius"), TEXT("Usage: sd.SearchDebug.FieldRadius 4000."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, FieldRadius, 1000.0f, 8000.0f, TEXT("Secondary search field radius")); }));
 	static FAutoConsoleCommand TargetSmoothingConsoleCommand(TEXT("sd.SearchDebug.TargetSmoothing"), TEXT("Usage: sd.SearchDebug.TargetSmoothing 18."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, TargetSmoothing, 1.0f, 40.0f, TEXT("Secondary search target smoothing")); }));
@@ -511,7 +549,7 @@ void FSecondarySearchTask::Start(
 	}
 	else
 	{
-		OpenSet.Add({ StartKey, GetSearchPriority(Mode, Result.StartLocation, Result.GoalLocation, 0.0f), OpenSequence++ });
+		PushOpenItem(OpenSet, { StartKey, GetSearchPriority(Mode, Result.StartLocation, Result.GoalLocation, 0.0f), OpenSequence++ });
 		bActive = true;
 	}
 }
@@ -616,7 +654,7 @@ void FSecondarySearchTask::Step(UWorld* World, const FSecondarySearchSettings& S
 				}
 				else
 				{
-					OpenSet.Add({ NextKey, GetSearchPriority(Mode, NextLocation, Result.GoalLocation, NewCost), OpenSequence++ });
+					PushOpenItem(OpenSet, { NextKey, GetSearchPriority(Mode, NextLocation, Result.GoalLocation, NewCost), OpenSequence++ });
 				}
 
 				Result.FrontierNodes.Add(NextLocation);
@@ -872,7 +910,7 @@ float FSecondarySearchDebug::GetCellSize()
 #if !UE_BUILD_SHIPPING
 	return SecondarySearchDebugState::CellSize;
 #else
-	return 45.0f;
+	return 28.0f;
 #endif
 }
 
@@ -881,7 +919,7 @@ float FSecondarySearchDebug::GetNodeScale()
 #if !UE_BUILD_SHIPPING
 	return SecondarySearchDebugState::NodeScale;
 #else
-	return 0.35f;
+	return 0.24f;
 #endif
 }
 

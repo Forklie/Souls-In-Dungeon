@@ -43,17 +43,17 @@ struct FSecondarySearchVisualEvent
 
 struct FSecondarySearchSettings
 {
-	float CellSize = 45.0f;
+	float CellSize = 28.0f;
 	bool bAllowDiagonal = false;
-	int32 MaxExpandedNodes = 3600;
+	int32 MaxExpandedNodes = 5000;
 	float MaxSearchDistance = 4000.0f;
 	float GoalAcceptanceRadius = 55.0f;
 	float PathPointReachRadius = 35.0f;
 	FVector ProjectionExtent = FVector(80.0f, 80.0f, 300.0f);
 	float DebugDrawDuration = 0.75f;
 	float DebugPointZOffset = 80.0f;
-	int32 MaxDebugDrawNodes = 4200;
-	int32 MaxDebugSearchStepsPerTick = 18;
+	int32 MaxDebugDrawNodes = 12000;
+	int32 MaxDebugSearchStepsPerTick = 96;
 	float DebugVisualizerUpdateInterval = 0.05f;
 	float PathTubeRadius = 5.0f;
 	float VisualizationRevealRate = 900.0f;

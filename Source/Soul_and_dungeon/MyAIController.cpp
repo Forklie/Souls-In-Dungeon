@@ -95,7 +95,10 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 	bDebugSearchWasEnabled = true;
 	EnsureSecondarySearchVisualizer(AI);
 
-	const FSecondarySearchSettings EffectiveSearchSettings = BuildSecondarySearchSettings();
+	FSecondarySearchSettings EffectiveSearchSettings = BuildSecondarySearchSettings();
+	const float DistToPlayer = FVector::Dist(AI->GetActorLocation(), Player->GetActorLocation());
+	EffectiveSearchSettings.MaxSearchDistance = FMath::Max(EffectiveSearchSettings.MaxSearchDistance, DistToPlayer * 1.5f);
+	EffectiveSearchSettings.MaxExpandedNodes = FMath::Max(EffectiveSearchSettings.MaxExpandedNodes, FMath::CeilToInt((DistToPlayer * 3.0f) / EffectiveSearchSettings.CellSize) * 20);
 
 	if (FSecondarySearchDebug::ConsumeClearRequested())
 	{
@@ -126,9 +129,30 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 	if (UNavigationSystemV1* NavSystem = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld()))
 	{
 		FNavLocation ProjectedGoal;
-		if (NavSystem->ProjectPointToNavigation(Player->GetActorLocation(), ProjectedGoal, EffectiveSearchSettings.ProjectionExtent))
+		if (NavSystem->ProjectPointToNavigation(Player->GetActorLocation(), ProjectedGoal, EffectiveSearchSettings.ProjectionExtent) ||
+			NavSystem->ProjectPointToNavigation(Player->GetActorLocation(), ProjectedGoal, FVector(320.0f, 320.0f, 650.0f)))
 		{
 			SearchGoalLocation = ProjectedGoal.Location;
+		}
+		else if (DebugBaseGridNodes.Num() > 0)
+		{
+			float BestDistanceSquared = FMath::Square(650.0f);
+			bool bFoundFallbackGoal = false;
+			for (const FVector& Candidate : DebugBaseGridNodes)
+			{
+				const float DistanceSquared = FVector::DistSquared(Player->GetActorLocation(), Candidate);
+				if (DistanceSquared < BestDistanceSquared)
+				{
+					BestDistanceSquared = DistanceSquared;
+					SearchGoalLocation = Candidate;
+					bFoundFallbackGoal = true;
+				}
+			}
+
+			if (!bFoundFallbackGoal)
+			{
+				SearchGoalLocation = LastSearchGoal.IsNearlyZero() ? Player->GetActorLocation() : LastSearchGoal;
+			}
 		}
 	}
 
@@ -148,17 +172,24 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 			SearchMode,
 			ActiveSecondarySearchSettings);
 
-		AStarPreviewTask.Start(
-			GetWorld(),
-			AI->GetActorLocation(),
-			SearchGoalLocation,
-			ESecondarySearchMode::AStar,
-			ActiveSecondarySearchSettings);
+		if (SearchMode == ESecondarySearchMode::AStar)
+		{
+			AStarPreviewTask.Reset();
+		}
+		else
+		{
+			AStarPreviewTask.Start(
+				GetWorld(),
+				AI->GetActorLocation(),
+				SearchGoalLocation,
+				ESecondarySearchMode::AStar,
+				ActiveSecondarySearchSettings);
+		}
 	}
 
 	const FSecondarySearchSettings& StepSettings = SearchTask.IsActive() ? ActiveSecondarySearchSettings : EffectiveSearchSettings;
 	SearchTask.Step(GetWorld(), StepSettings, StepSettings.MaxDebugSearchStepsPerTick);
-	AStarPreviewTask.Step(GetWorld(), StepSettings, FMath::Max(4, StepSettings.MaxDebugSearchStepsPerTick / 2));
+	AStarPreviewTask.Step(GetWorld(), StepSettings, FMath::Clamp(StepSettings.MaxDebugSearchStepsPerTick / 4, 8, 32));
 
 	LastSearchResult = SearchTask.BuildDebugResult();
 	LastAStarPreviewResult = AStarPreviewTask.BuildDebugResult();
@@ -216,14 +247,14 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 FSecondarySearchSettings AMyAIController::BuildSecondarySearchSettings() const
 {
 	FSecondarySearchSettings Settings = SecondarySearchSettings;
-	Settings.CellSize = FMath::Clamp(FSecondarySearchDebug::GetCellSize(), 30.0f, 200.0f);
+	Settings.CellSize = FMath::Clamp(FSecondarySearchDebug::GetCellSize(), 20.0f, 200.0f);
 	Settings.MaxSearchDistance = FMath::Clamp(FSecondarySearchDebug::GetFieldRadius(), 1000.0f, 8000.0f);
 	const float ProjectionRadius = FMath::Max(80.0f, Settings.CellSize * 1.25f);
 	Settings.ProjectionExtent = FVector(ProjectionRadius, ProjectionRadius, 300.0f);
 	Settings.GoalAcceptanceRadius = FMath::Max(36.0f, Settings.CellSize * 0.75f);
 	Settings.PathPointReachRadius = FMath::Max(22.0f, Settings.CellSize * 0.5f);
 	Settings.MaxDebugDrawNodes = FSecondarySearchDebug::GetNodeDensity();
-	Settings.MaxExpandedNodes = FMath::Max(Settings.MaxExpandedNodes, Settings.MaxDebugDrawNodes);
+	Settings.MaxExpandedNodes = FMath::Max(Settings.MaxExpandedNodes, FMath::Min(Settings.MaxDebugDrawNodes, 5000));
 	return Settings;
 }
 

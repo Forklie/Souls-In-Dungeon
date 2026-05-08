@@ -72,8 +72,14 @@ private:
 		float FrontierZOffset = 0.0f;
 		float StateChangeSeconds = 0.0f;
 		float LastTouchedSeconds = 0.0f;
+		float VisualBlend = 0.0f;
+		float TargetVisualBlend = 0.0f;
+		float RippleStrength = 0.0f;
+		float LastRippleSeconds = 0.0f;
 		int32 LastTouchedGeneration = -1;
 		int32 SequenceIndex = 0;
+		bool bWasAtomAnimated = false;
+		FVector AtomOffset = FVector::ZeroVector;
 		ERetainedNodeVisualState State = ERetainedNodeVisualState::Base;
 	};
 
@@ -124,6 +130,7 @@ private:
 		const FSecondarySearchSettings& Settings,
 		float WorldSeconds,
 		bool bPreview);
+	void TriggerRippleAt(const FVector& Location, float Intensity, float Radius);
 
 	UMaterialInstanceDynamic* CreateColorMaterial(UMaterialInterface* ParentMaterial, const FLinearColor& Color, const FString& Name);
 	USplineMeshComponent* AcquirePathSpline();
@@ -218,14 +225,24 @@ private:
 
 	TMap<FIntPoint, FRetainedNodeRecord> RetainedNodes;
 	TArray<FIntPoint> RetainedNodeKeys;
+	TSet<FIntPoint> AnimatedAtomKeys;
 	TArray<FPathLayer> PathLayers;
 	TArray<FVector> LastSuccessfulPath;
 	TArray<FVector> LastPreviewPath;
 	TArray<FVector> LastSampledNodes;
 
+	FVector DesiredTargetLocation = FVector::ZeroVector;
 	FVector SmoothedTargetLocation = FVector::ZeroVector;
+	FVector DesiredStartLocation = FVector::ZeroVector;
+	FVector SmoothedStartLocation = FVector::ZeroVector;
+	FVector DesiredGoalLocation = FVector::ZeroVector;
+	FVector SmoothedGoalLocation = FVector::ZeroVector;
 	bool bHasSmoothedTargetLocation = false;
+	bool bHasSmoothedStartLocation = false;
+	bool bHasSmoothedGoalLocation = false;
 	bool bHasTargetLocation = false;
+	bool bHasStartLocation = false;
+	bool bHasGoalLocation = false;
 	bool bLastXRayEnabled = true;
 	bool bLastTrailsEnabled = true;
 	bool bLastShowBaseGrid = true;

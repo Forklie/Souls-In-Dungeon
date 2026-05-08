@@ -152,7 +152,7 @@ void ASecondarySearchVisualizerActor::UpdateVisualization(
 	CachedNodeSoftness = FMath::Clamp(NodeSoftness, 0.1f, 1.0f);
 	CachedTargetSmoothing = FMath::Clamp(TargetSmoothing, 1.0f, 40.0f);
 	CachedTargetZOffset = Settings.DebugPointZOffset;
-	CachedVisualQuality = VisualQuality;
+	CachedVisualQuality = ESecondarySearchVisualQuality::High;
 	bCachedLastPathFallback = bLastPathFallback;
 
 	const int32 NodeCap = FMath::Max(0, MaxVisibleNodes > 0 ? MaxVisibleNodes : Settings.MaxDebugDrawNodes);
@@ -184,6 +184,37 @@ void ASecondarySearchVisualizerActor::UpdateVisualization(
 		LastVisualizationRevision = Result.VisualizationRevision;
 		LastSearchGeneration = Result.SearchGeneration;
 		LastNodeUpdateSeconds = WorldSeconds;
+	}
+
+	if (!Result.StartLocation.IsNearlyZero())
+	{
+		DesiredStartLocation = Result.StartLocation;
+		if (!bHasSmoothedStartLocation)
+		{
+			SmoothedStartLocation = DesiredStartLocation;
+			bHasSmoothedStartLocation = true;
+		}
+		bHasStartLocation = true;
+	}
+	if (!Result.CurrentTarget.IsNearlyZero())
+	{
+		DesiredTargetLocation = Result.CurrentTarget;
+		if (!bHasSmoothedTargetLocation)
+		{
+			SmoothedTargetLocation = DesiredTargetLocation;
+			bHasSmoothedTargetLocation = true;
+		}
+		bHasTargetLocation = true;
+	}
+	if (!Result.GoalLocation.IsNearlyZero())
+	{
+		DesiredGoalLocation = Result.GoalLocation;
+		if (!bHasSmoothedGoalLocation)
+		{
+			SmoothedGoalLocation = DesiredGoalLocation;
+			bHasSmoothedGoalLocation = true;
+		}
+		bHasGoalLocation = true;
 	}
 
 	UpdateEndpointMarkers(Result, Settings);
@@ -219,25 +250,7 @@ void ASecondarySearchVisualizerActor::UpdateVisualization(
 		TrimPathHistory(1);
 	}
 
-	if (!Result.CurrentTarget.IsNearlyZero())
-	{
-		if (!bHasSmoothedTargetLocation)
-		{
-			SmoothedTargetLocation = Result.CurrentTarget;
-			bHasSmoothedTargetLocation = true;
-		}
-		else
-		{
-			const float Alpha = 1.0f - FMath::Exp(-0.05f * CachedTargetSmoothing);
-			SmoothedTargetLocation = FMath::Lerp(SmoothedTargetLocation, Result.CurrentTarget, Alpha);
-		}
-		bHasTargetLocation = true;
-	}
-
 	UpdateStatusHud(Result);
-	UpdateFluidAnimation(0.0f, WorldSeconds);
-	UpdatePathLayers(0.0f, WorldSeconds);
-	UpdateTargetPulse(0.0f, WorldSeconds);
 #endif
 }
 
@@ -261,6 +274,10 @@ void ASecondarySearchVisualizerActor::ClearVisualization()
 
 	bHasTargetLocation = false;
 	bHasSmoothedTargetLocation = false;
+	bHasStartLocation = false;
+	bHasSmoothedStartLocation = false;
+	bHasGoalLocation = false;
+	bHasSmoothedGoalLocation = false;
 	ResetRetainedState();
 	LastSuccessfulPath.Reset();
 	LastPreviewPath.Reset();
@@ -330,12 +347,13 @@ void ASecondarySearchVisualizerActor::UpdateBaseGridInstances(const FSecondarySe
 	FrontierNodes->ClearInstances();
 	RetainedNodes.Reset();
 	RetainedNodeKeys.Reset();
+	AnimatedAtomKeys.Reset();
 
 	const int32 DrawCount = FMath::Min(Result.SampledNodes.Num(), NodeCap);
 	RetainedNodes.Reserve(DrawCount);
 	RetainedNodeKeys.Reserve(DrawCount);
 
-	const float BaseRadius = FMath::Max(5.5f, Settings.DebugExpandedNodeRadius * 0.58f * CachedNodeScale);
+	const float BaseRadius = FMath::Max(2.4f, Settings.DebugExpandedNodeRadius * 0.44f * CachedNodeScale);
 	const float ExpandedRadius = FMath::Max(5.0f, Settings.DebugExpandedNodeRadius * CachedNodeScale);
 	const float FrontierRadius = FMath::Max(6.0f, Settings.DebugFrontierNodeRadius * CachedNodeScale);
 
@@ -384,16 +402,27 @@ void ASecondarySearchVisualizerActor::UpdateRetainedNodeInstances(const FSeconda
 			continue;
 		}
 
+		const bool bStateChanged = Record->State != ERetainedNodeVisualState::Expanded;
 		Record->State = ERetainedNodeVisualState::Expanded;
 		Record->LastTouchedGeneration = Result.SearchGeneration;
 		Record->LastTouchedSeconds = WorldSeconds;
-		Record->StateChangeSeconds = WorldSeconds - Index * 0.002f;
+		Record->StateChangeSeconds = bStateChanged ? WorldSeconds - Index * 0.002f : Record->StateChangeSeconds;
+		Record->TargetVisualBlend = 1.0f;
+		if (bStateChanged)
+		{
+			// Do NOT fire an immediate ripple pop — let the S-curve blend handle the rise smoothly
+		}
 		Record->SequenceIndex = Index;
 
-		BaseGridNodes->UpdateInstanceTransform(Record->BaseInstanceIndex, MakeHiddenTransform(), true, false, true);
+		BaseGridNodes->UpdateInstanceTransform(
+			Record->BaseInstanceIndex,
+			bLastShowBaseGrid ? MakeDiskTransform(Record->Location, Record->BaseRadius, Record->BaseHeight, Record->BaseZOffset) : MakeHiddenTransform(),
+			true,
+			false,
+			true);
 		ExpandedNodes->UpdateInstanceTransform(
 			Record->ExpandedInstanceIndex,
-			MakeDiskTransform(Record->Location, Record->ExpandedRadius, Record->ExpandedHeight, Record->ExpandedZOffset),
+			MakeDiskTransform(Record->Location, FMath::Max(1.0f, Record->ExpandedRadius * FMath::Max(0.2f, Record->VisualBlend)), Record->ExpandedHeight, Record->ExpandedZOffset),
 			true,
 			false,
 			true);
@@ -410,17 +439,28 @@ void ASecondarySearchVisualizerActor::UpdateRetainedNodeInstances(const FSeconda
 			continue;
 		}
 
+		const bool bStateChanged = Record->State != ERetainedNodeVisualState::Frontier;
 		Record->State = ERetainedNodeVisualState::Frontier;
 		Record->LastTouchedGeneration = Result.SearchGeneration;
 		Record->LastTouchedSeconds = WorldSeconds;
-		Record->StateChangeSeconds = WorldSeconds - Index * 0.003f;
+		Record->StateChangeSeconds = bStateChanged ? WorldSeconds - Index * 0.003f : Record->StateChangeSeconds;
+		Record->TargetVisualBlend = 1.0f;
+		if (bStateChanged)
+		{
+			// Do NOT fire an immediate ripple pop — let the S-curve blend handle the rise smoothly
+		}
 		Record->SequenceIndex = Index;
 
-		BaseGridNodes->UpdateInstanceTransform(Record->BaseInstanceIndex, MakeHiddenTransform(), true, false, true);
+		BaseGridNodes->UpdateInstanceTransform(
+			Record->BaseInstanceIndex,
+			bLastShowBaseGrid ? MakeDiskTransform(Record->Location, Record->BaseRadius, Record->BaseHeight, Record->BaseZOffset) : MakeHiddenTransform(),
+			true,
+			false,
+			true);
 		ExpandedNodes->UpdateInstanceTransform(Record->ExpandedInstanceIndex, MakeHiddenTransform(), true, false, true);
 		FrontierNodes->UpdateInstanceTransform(
 			Record->FrontierInstanceIndex,
-			MakeDiskTransform(Record->Location, Record->FrontierRadius, Record->FrontierHeight, Record->FrontierZOffset),
+			MakeDiskTransform(Record->Location, FMath::Max(1.0f, Record->FrontierRadius * FMath::Max(0.2f, Record->VisualBlend)), Record->FrontierHeight, Record->FrontierZOffset),
 			true,
 			false,
 			true);
@@ -437,11 +477,13 @@ void ASecondarySearchVisualizerActor::UpdateEndpointMarkers(const FSecondarySear
 	GoalMarker->ClearInstances();
 	if (!Result.StartLocation.IsNearlyZero())
 	{
-		AddWorldInstance(StartMarker, MakeSphereTransform(Result.StartLocation, Settings.DebugEndpointRadius * 0.45f * CachedNodeScale, Settings.DebugPointZOffset + 18.0f));
+		const FVector StartLocation = bHasSmoothedStartLocation ? SmoothedStartLocation : Result.StartLocation;
+		AddWorldInstance(StartMarker, MakeSphereTransform(StartLocation, Settings.DebugEndpointRadius * 0.45f * CachedNodeScale, Settings.DebugPointZOffset + 18.0f));
 	}
 	if (!Result.GoalLocation.IsNearlyZero())
 	{
-		AddWorldInstance(GoalMarker, MakeSphereTransform(Result.GoalLocation, Settings.DebugEndpointRadius * 0.45f * CachedNodeScale, Settings.DebugPointZOffset + 18.0f));
+		const FVector GoalLocation = bHasSmoothedGoalLocation ? SmoothedGoalLocation : Result.GoalLocation;
+		AddWorldInstance(GoalMarker, MakeSphereTransform(GoalLocation, Settings.DebugEndpointRadius * 0.45f * CachedNodeScale, Settings.DebugPointZOffset + 18.0f));
 	}
 }
 
@@ -503,29 +545,29 @@ void ASecondarySearchVisualizerActor::UpdateFluidAnimation(float DeltaSeconds, f
 	if (BaseGridMaterial)
 	{
 		BaseGridMaterial->SetVectorParameterValue(TEXT("DebugColor"), FLinearColor(0.03f, 0.34f, 0.95f, 1.0f));
-		BaseGridMaterial->SetScalarParameterValue(TEXT("Opacity"), 0.42f + CachedGlowIntensity * 0.06f);
-		BaseGridMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), 0.34f);
+		BaseGridMaterial->SetScalarParameterValue(TEXT("Opacity"), 0.46f + CachedGlowIntensity * 0.04f);
+		BaseGridMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), 0.36f);
 		BaseGridMaterial->SetScalarParameterValue(TEXT("SoftFalloff"), CachedNodeSoftness);
-		BaseGridMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), 0.7f * CachedGlowIntensity);
-		BaseGridMaterial->SetScalarParameterValue(TEXT("WavePhase"), WorldSeconds * 0.2f);
+		BaseGridMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), 0.55f * CachedGlowIntensity);
+		BaseGridMaterial->SetScalarParameterValue(TEXT("WavePhase"), WorldSeconds * 0.08f);
 	}
 	if (FrontierMaterial)
 	{
-		const float Pulse = 0.5f + 0.5f * FMath::Sin(WorldSeconds * 4.0f * CachedVisualSpeed);
+		const float Pulse = 0.5f + 0.5f * FMath::Sin(WorldSeconds * 2.0f * CachedVisualSpeed);
 		FrontierMaterial->SetScalarParameterValue(TEXT("Pulse"), Pulse * CachedNodePulse);
-		FrontierMaterial->SetScalarParameterValue(TEXT("Opacity"), 0.8f);
-		FrontierMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), 0.9f);
+		FrontierMaterial->SetScalarParameterValue(TEXT("Opacity"), 0.78f);
+		FrontierMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), 0.86f);
 		FrontierMaterial->SetScalarParameterValue(TEXT("SoftFalloff"), CachedNodeSoftness);
-		FrontierMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), CachedGlowIntensity);
-		FrontierMaterial->SetScalarParameterValue(TEXT("WavePhase"), WorldSeconds * CachedVisualSpeed);
+		FrontierMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), 0.95f * CachedGlowIntensity);
+		FrontierMaterial->SetScalarParameterValue(TEXT("WavePhase"), WorldSeconds * CachedVisualSpeed * 0.55f);
 	}
 	if (ExpandedMaterial)
 	{
-		ExpandedMaterial->SetScalarParameterValue(TEXT("Opacity"), 0.46f);
-		ExpandedMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), 0.46f);
+		ExpandedMaterial->SetScalarParameterValue(TEXT("Opacity"), 0.48f);
+		ExpandedMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), 0.42f);
 		ExpandedMaterial->SetScalarParameterValue(TEXT("SoftFalloff"), CachedNodeSoftness);
-		ExpandedMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), 0.55f * CachedGlowIntensity);
-		ExpandedMaterial->SetScalarParameterValue(TEXT("WavePhase"), WorldSeconds * 0.35f);
+		ExpandedMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), 0.5f * CachedGlowIntensity);
+		ExpandedMaterial->SetScalarParameterValue(TEXT("WavePhase"), WorldSeconds * 0.12f);
 	}
 
 	if (CachedVisualQuality == ESecondarySearchVisualQuality::Low)
@@ -533,26 +575,151 @@ void ASecondarySearchVisualizerActor::UpdateFluidAnimation(float DeltaSeconds, f
 		return;
 	}
 
+	// --- Player Water Interaction: apply atom displacement ONLY to Base state nodes ---
 	bool bDirty = false;
+	if (bLastShowBaseGrid && bHasSmoothedTargetLocation)
+	{
+		const float InteractionRadius = 240.0f;
+		const float InteractionRadiusSq = FMath::Square(InteractionRadius);
+		
+		// Reset nodes that were displaced last frame but are no longer in range
+		for (const FIntPoint& PreviousKey : AnimatedAtomKeys)
+		{
+			if (FRetainedNodeRecord* Record = RetainedNodes.Find(PreviousKey))
+			{
+				const float DistSq = FVector::DistSquared2D(Record->Location, SmoothedTargetLocation);
+				if (DistSq >= InteractionRadiusSq)
+				{
+					Record->AtomOffset = FMath::VInterpTo(Record->AtomOffset, FVector::ZeroVector, DeltaSeconds, 7.0f);
+					if (Record->State == ERetainedNodeVisualState::Base)
+					{
+						BaseGridNodes->UpdateInstanceTransform(
+							Record->BaseInstanceIndex,
+							MakeDiskTransform(Record->Location + Record->AtomOffset, Record->BaseRadius, Record->BaseHeight, Record->BaseZOffset),
+							true, false, true);
+						bDirty = true;
+					}
+					if (Record->AtomOffset.IsNearlyZero(0.5f))
+					{
+						Record->AtomOffset = FVector::ZeroVector;
+						Record->bWasAtomAnimated = false;
+					}
+				}
+			}
+		}
+		AnimatedAtomKeys.Reset();
+
+		// Apply water displacement to Base nodes near the player
+		for (auto& Pair : RetainedNodes)
+		{
+			FRetainedNodeRecord& Rec = Pair.Value;
+			if (Rec.State != ERetainedNodeVisualState::Base)
+			{
+				continue;
+			}
+			const float DistSq = FVector::DistSquared2D(Rec.Location, SmoothedTargetLocation);
+			if (DistSq >= InteractionRadiusSq && Rec.AtomOffset.IsNearlyZero(0.5f))
+			{
+				continue;
+			}
+			FVector TargetAtomOffset = FVector::ZeroVector;
+			if (DistSq < InteractionRadiusSq)
+			{
+				const float Dist = FMath::Sqrt(DistSq);
+				const float Alpha = 1.0f - (Dist / InteractionRadius);
+				const float PushStrength = Alpha * Alpha * 30.0f; // quadratic falloff for natural feel
+				const FVector PushDir = (Rec.Location - SmoothedTargetLocation).GetSafeNormal2D();
+				TargetAtomOffset = PushDir * PushStrength + FVector(0.0f, 0.0f, PushStrength * 0.5f);
+			}
+			Rec.AtomOffset = FMath::VInterpTo(Rec.AtomOffset, TargetAtomOffset, DeltaSeconds, 8.0f);
+			Rec.bWasAtomAnimated = true;
+			AnimatedAtomKeys.Add(Pair.Key);
+			BaseGridNodes->UpdateInstanceTransform(
+				Rec.BaseInstanceIndex,
+				MakeDiskTransform(Rec.Location + Rec.AtomOffset, Rec.BaseRadius, Rec.BaseHeight, Rec.BaseZOffset),
+				true, false, true);
+			bDirty = true;
+		}
+	}
+	else
+	{
+		AnimatedAtomKeys.Reset();
+	}
+
 	for (const FIntPoint& Key : RetainedNodeKeys)
 	{
 		FRetainedNodeRecord* Record = RetainedNodes.Find(Key);
-		if (!Record || Record->State == ERetainedNodeVisualState::Base)
+		if (!Record)
+		{
+			continue;
+		}
+
+		// Skip entirely if this is a base node not near the player and not fading
+		if (Record->State == ERetainedNodeVisualState::Base)
 		{
 			continue;
 		}
 
 		const float Age = FMath::Max(0.0f, WorldSeconds - Record->StateChangeSeconds);
 		const float FadeAlpha = SmoothStep01(Age / CachedNodeFadeTime);
+		// Use a constant-rate progression for the underlying blend state.
+		// Combined with EaseInOutSine below, this creates a smooth S-curve transition in time (Rise and Fall).
+		const float TransitionSpeed = 2.8f * CachedVisualSpeed;
+		if (Record->VisualBlend < Record->TargetVisualBlend)
+		{
+			Record->VisualBlend = FMath::Min(Record->TargetVisualBlend, Record->VisualBlend + DeltaSeconds * TransitionSpeed);
+		}
+		else
+		{
+			Record->VisualBlend = FMath::Max(Record->TargetVisualBlend, Record->VisualBlend - DeltaSeconds * TransitionSpeed);
+		}
+
+		const float TransitionAlpha = EaseInOutSine(Record->VisualBlend);
+		const float RippleAge = FMath::Max(0.0f, WorldSeconds - Record->LastRippleSeconds);
+		const float RippleFalloff = (1.0f - SmoothStep01(RippleAge / 0.45f)) * Record->RippleStrength;
+		if (RippleAge > 0.65f)
+		{
+			Record->RippleStrength = 0.0f;
+		}
+		const float BaseFreq = 2.1f * CachedVisualSpeed;
 		const float Phase = (Record->SequenceIndex % 17) * 0.37f;
-		const float Breathing = 1.0f + 0.14f * CachedNodePulse * QualityScale * FMath::Sin(WorldSeconds * 3.0f * CachedVisualSpeed + Phase);
+		
+		// Fluid multi-octave breathing for more organic feel
+		const float SineA = FMath::Sin(WorldSeconds * BaseFreq + Phase);
+		const float SineB = FMath::Sin(WorldSeconds * BaseFreq * 0.45f + Phase * 0.5f);
+		const float Breathing = 1.0f + 0.045f * CachedNodePulse * QualityScale * (SineA * 0.75f + SineB * 0.25f);
+		
+		const float RipplePulse = 0.35f * RippleFalloff * FMath::Sin(RippleAge * 12.0f + Phase);
+		
+		// Vertical fluid wobble (up and down motion) - Ultra-smooth timing
+		const float BobFreq = 0.75f * CachedVisualSpeed;
+		const float RawSineA = FMath::Sin(WorldSeconds * BobFreq + Phase);
+		const float RawSineB = FMath::Sin(WorldSeconds * BobFreq * 0.48f + Phase * 1.3f);
+		
+		// Apply SmoothStep logic to the sine waves to flatten peaks and smoothen the 'lower to upper' transition
+		const float SmoothSineA = RawSineA * RawSineA * (3.0f - 2.0f * FMath::Abs(RawSineA)) * FMath::Sign(RawSineA);
+		const float SmoothSineB = RawSineB * RawSineB * (3.0f - 2.0f * FMath::Abs(RawSineB)) * FMath::Sign(RawSineB);
+		
+		const float VerticalWobble = (SmoothSineA * 3.0f + SmoothSineB * 1.2f) * CachedNodePulse * QualityScale * TransitionAlpha;
+
+		if (bLastShowBaseGrid)
+		{
+			BaseGridNodes->UpdateInstanceTransform(
+				Record->BaseInstanceIndex,
+				MakeDiskTransform(Record->Location + Record->AtomOffset, Record->BaseRadius * (1.0f + RipplePulse * 0.15f), Record->BaseHeight, Record->BaseZOffset + RipplePulse * 15.0f),
+				true,
+				false,
+				true);
+			bDirty = true;
+		}
 
 		if (Record->State == ERetainedNodeVisualState::Frontier && ShouldAnimateRetainedNode(*Record, WorldSeconds))
 		{
-			const float Pop = 1.0f + 0.35f * (1.0f - EaseOutCubic(FMath::Min(1.0f, Age * 4.0f)));
+			const float Pop = 1.0f + 0.08f * (1.0f - EaseOutCubic(FMath::Min(1.0f, Age * 4.0f)));
+			const float Radius = FMath::Lerp(Record->BaseRadius * 0.85f, Record->FrontierRadius * Breathing * Pop, TransitionAlpha);
 			FrontierNodes->UpdateInstanceTransform(
 				Record->FrontierInstanceIndex,
-				MakeDiskTransform(Record->Location, Record->FrontierRadius * Breathing * Pop, Record->FrontierHeight, Record->FrontierZOffset),
+				MakeDiskTransform(Record->Location, Radius, Record->FrontierHeight, FMath::Lerp(Record->BaseZOffset, Record->FrontierZOffset * 0.75f, TransitionAlpha) + VerticalWobble),
 				true,
 				false,
 				true);
@@ -560,10 +727,11 @@ void ASecondarySearchVisualizerActor::UpdateFluidAnimation(float DeltaSeconds, f
 		}
 		else if (Record->State == ERetainedNodeVisualState::Expanded && ShouldAnimateRetainedNode(*Record, WorldSeconds))
 		{
-			const float Radius = FMath::Lerp(Record->ExpandedRadius * 1.08f, Record->ExpandedRadius * 0.92f, FadeAlpha);
+			const float SettledRadius = FMath::Lerp(Record->ExpandedRadius * 1.08f, Record->ExpandedRadius * 0.9f, FadeAlpha);
+			const float Radius = FMath::Lerp(Record->BaseRadius * 0.8f, SettledRadius, TransitionAlpha);
 			ExpandedNodes->UpdateInstanceTransform(
 				Record->ExpandedInstanceIndex,
-				MakeDiskTransform(Record->Location, Radius, Record->ExpandedHeight, Record->ExpandedZOffset),
+				MakeDiskTransform(Record->Location, Radius, Record->ExpandedHeight, FMath::Lerp(Record->BaseZOffset, Record->ExpandedZOffset * 0.65f, TransitionAlpha) + VerticalWobble),
 				true,
 				false,
 				true);
@@ -571,6 +739,11 @@ void ASecondarySearchVisualizerActor::UpdateFluidAnimation(float DeltaSeconds, f
 		}
 
 		if (Age > CachedNodeFadeTime + 0.45f && Record->LastTouchedGeneration != LastSearchGeneration)
+		{
+			Record->TargetVisualBlend = 0.0f;
+		}
+
+		if (Record->TargetVisualBlend <= 0.0f && Record->VisualBlend <= 0.03f)
 		{
 			ExpandedNodes->UpdateInstanceTransform(Record->ExpandedInstanceIndex, MakeHiddenTransform(), true, false, true);
 			FrontierNodes->UpdateInstanceTransform(Record->FrontierInstanceIndex, MakeHiddenTransform(), true, false, true);
@@ -606,83 +779,111 @@ void ASecondarySearchVisualizerActor::UpdatePathLayers(float DeltaSeconds, float
 			Layer.bWaveComplete = Layer.WaveDistance >= Layer.TotalDistance - KINDA_SMALL_NUMBER;
 		}
 
+		// --- Age-based fade-in on creation for a smooth reveal ---
 		float LayerAlpha = 1.0f;
 		if (Layer.SupersededSeconds >= 0.0f)
 		{
 			LayerAlpha = 1.0f - SmoothStep01((WorldSeconds - Layer.SupersededSeconds) / CachedPathFadeTime);
 		}
+		const float CreationAge = WorldSeconds - Layer.CreatedSeconds;
+		const float FadeInAlpha = SmoothStep01(CreationAge / 0.35f);
+		const float EffectiveAlpha = LayerAlpha * FadeInAlpha;
 
+		// --- Travelling crest pulse: breathes in size as it moves ---
+		const float CrestPulseFreq = 3.5f * CachedVisualSpeed;
+		const float CrestPulse = 1.0f + 0.18f * FMath::Sin(WorldSeconds * CrestPulseFreq);
+		const float CrestRadiusScale = 1.4f * CrestPulse;
+		const float WakeRadiusScale = 1.05f;
+
+		// --- Wave windows ---
+		const float WaveWindow = FMath::Max(120.0f, Layer.TotalDistance * CachedFlowBandWidth);
+		const float WakeWindow = WaveWindow * 2.8f;
+
+		// --- Update materials ---
 		const FLinearColor PathColor = Layer.bPreview ? FLinearColor(0.75f, 0.05f, 1.0f, 1.0f) : FLinearColor(1.0f, 0.52f, 0.0f, 1.0f);
+
+		// --- Compute the peak crest glow across the whole layer (used for shared BaseMaterial) ---
+		float PeakCrestGlow = 0.0f;
+		for (const FPathSegmentRecord& Seg : Layer.Segments)
+		{
+			const float Mid = Seg.StartDistance + Seg.Length * 0.5f;
+			const float Influence = FMath::Max(0.0f, 1.0f - FMath::Abs(Layer.WaveDistance - Mid) / WaveWindow);
+			PeakCrestGlow = FMath::Max(PeakCrestGlow, Influence * Influence);
+		}
+
+		// --- Set BaseMaterial once for the whole layer ---
 		if (Layer.BaseMaterial)
 		{
+			const float BaseOpacity = (Layer.bPreview ? 0.22f : 0.35f + PeakCrestGlow * 0.28f) * EffectiveAlpha;
 			Layer.BaseMaterial->SetVectorParameterValue(TEXT("DebugColor"), PathColor);
-			Layer.BaseMaterial->SetScalarParameterValue(TEXT("Opacity"), (Layer.bPreview ? 0.22f : 0.32f) * LayerAlpha);
-			Layer.BaseMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), (Layer.bPreview ? 0.22f : 0.32f) * LayerAlpha);
-			Layer.BaseMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), CachedGlowIntensity * 0.45f);
+			Layer.BaseMaterial->SetScalarParameterValue(TEXT("Opacity"), BaseOpacity);
+			Layer.BaseMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), BaseOpacity);
+			Layer.BaseMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), CachedGlowIntensity * 0.45f + PeakCrestGlow * CachedGlowIntensity);
 			Layer.BaseMaterial->SetScalarParameterValue(TEXT("WavePhase"), WorldSeconds * CachedVisualSpeed);
 			Layer.BaseMaterial->SetScalarParameterValue(TEXT("FlowBandWidth"), CachedFlowBandWidth);
 		}
+
+		// --- Set WaveMaterial once (crest is one travelling window) ---
 		if (Layer.WaveMaterial)
 		{
 			Layer.WaveMaterial->SetVectorParameterValue(TEXT("DebugColor"), PathColor);
-			Layer.WaveMaterial->SetScalarParameterValue(TEXT("Opacity"), (Layer.bPreview ? 0.0f : 1.0f) * LayerAlpha);
-			Layer.WaveMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), (Layer.bPreview ? 0.0f : 1.0f) * LayerAlpha);
-			Layer.WaveMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), CachedGlowIntensity * 1.5f);
+			Layer.WaveMaterial->SetScalarParameterValue(TEXT("Opacity"), EffectiveAlpha);
+			Layer.WaveMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), EffectiveAlpha);
+			Layer.WaveMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), CachedGlowIntensity * (1.5f + 0.5f * CrestPulse));
 			Layer.WaveMaterial->SetScalarParameterValue(TEXT("WavePhase"), WorldSeconds * CachedVisualSpeed * 1.4f);
 			Layer.WaveMaterial->SetScalarParameterValue(TEXT("FlowBandWidth"), CachedFlowBandWidth);
 		}
+
+		// --- Set WakeMaterial once at the leading edge strength ---
 		if (Layer.WakeMaterial)
 		{
 			Layer.WakeMaterial->SetVectorParameterValue(TEXT("DebugColor"), PathColor);
-			Layer.WakeMaterial->SetScalarParameterValue(TEXT("Opacity"), (Layer.bPreview ? 0.0f : 0.45f) * LayerAlpha);
-			Layer.WakeMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), (Layer.bPreview ? 0.0f : 0.45f) * LayerAlpha);
+			Layer.WakeMaterial->SetScalarParameterValue(TEXT("Opacity"), 0.45f * EffectiveAlpha);
+			Layer.WakeMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), 0.45f * EffectiveAlpha);
 			Layer.WakeMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), CachedGlowIntensity);
 			Layer.WakeMaterial->SetScalarParameterValue(TEXT("WavePhase"), WorldSeconds * CachedVisualSpeed);
 			Layer.WakeMaterial->SetScalarParameterValue(TEXT("FlowBandWidth"), CachedFlowBandWidth);
 		}
 
-		const float CrestRadiusScale = 1.35f;
-		const float WakeRadiusScale = 1.05f;
-		const float WaveWindow = FMath::Max(120.0f, Layer.TotalDistance * CachedFlowBandWidth);
-		const float WakeWindow = WaveWindow * 2.8f;
-
+		// --- Per-segment: only geometry (visibility + spline positions/sizes) ---
 		for (FPathSegmentRecord& Segment : Layer.Segments)
 		{
 			const float SegmentEnd = Segment.StartDistance + Segment.Length;
 			const float CrestStartDistance = Layer.WaveDistance - WaveWindow * 0.45f;
-			const float CrestEndDistance = Layer.WaveDistance + WaveWindow * 0.35f;
-			const float WakeStartDistance = Layer.WaveDistance - WakeWindow;
-			const float WakeEndDistance = Layer.WaveDistance - WaveWindow * 0.15f;
+			const float CrestEndDistance   = Layer.WaveDistance + WaveWindow * 0.35f;
+			const float WakeStartDistance  = Layer.WaveDistance - WakeWindow;
+			const float WakeEndDistance    = Layer.WaveDistance - WaveWindow * 0.15f;
 			const bool bCrestVisible = !Layer.bPreview && CrestEndDistance >= Segment.StartDistance && CrestStartDistance <= SegmentEnd;
-			const bool bWakeVisible = !Layer.bPreview && WakeEndDistance >= Segment.StartDistance && WakeStartDistance <= SegmentEnd;
+			const bool bWakeVisible  = !Layer.bPreview && WakeEndDistance  >= Segment.StartDistance && WakeStartDistance  <= SegmentEnd;
+
 			if (Segment.BaseSpline)
 			{
-				Segment.BaseSpline->SetHiddenInGame(LayerAlpha <= 0.01f);
+				Segment.BaseSpline->SetHiddenInGame(EffectiveAlpha <= 0.01f);
 			}
 			if (Segment.WaveSpline)
 			{
-				Segment.WaveSpline->SetHiddenInGame(!bCrestVisible || LayerAlpha <= 0.01f);
+				Segment.WaveSpline->SetHiddenInGame(!bCrestVisible || EffectiveAlpha <= 0.01f);
 				if (bCrestVisible)
 				{
-					const float LocalStartAlpha = FMath::Clamp((FMath::Max(CrestStartDistance, Segment.StartDistance) - Segment.StartDistance) / Segment.Length, 0.0f, 1.0f);
-					const float LocalEndAlpha = FMath::Clamp((FMath::Min(CrestEndDistance, SegmentEnd) - Segment.StartDistance) / Segment.Length, 0.0f, 1.0f);
-					SetSplineSegment(
-						Segment.WaveSpline,
+					const float ClampedStart = FMath::Max(CrestStartDistance, Segment.StartDistance);
+					const float ClampedEnd   = FMath::Min(CrestEndDistance,   SegmentEnd);
+					const float LocalStartAlpha = FMath::Clamp((ClampedStart - Segment.StartDistance) / Segment.Length, 0.0f, 1.0f);
+					const float LocalEndAlpha   = FMath::Clamp((ClampedEnd   - Segment.StartDistance) / Segment.Length, 0.0f, 1.0f);
+					SetSplineSegment(Segment.WaveSpline,
 						FMath::Lerp(Segment.Start, Segment.End, LocalStartAlpha),
 						FMath::Lerp(Segment.Start, Segment.End, LocalEndAlpha),
-						5.0f * CrestRadiusScale,
+						(Layer.bPreview ? 3.5f : 5.0f) * CrestRadiusScale,
 						LocalEndAlpha > LocalStartAlpha);
 				}
 			}
 			if (Segment.WakeSpline)
 			{
-				Segment.WakeSpline->SetHiddenInGame(!bWakeVisible || LayerAlpha <= 0.01f);
+				Segment.WakeSpline->SetHiddenInGame(!bWakeVisible || EffectiveAlpha <= 0.01f);
 				if (bWakeVisible)
 				{
 					const float LocalStartAlpha = FMath::Clamp((FMath::Max(WakeStartDistance, Segment.StartDistance) - Segment.StartDistance) / Segment.Length, 0.0f, 1.0f);
-					const float LocalEndAlpha = FMath::Clamp((FMath::Min(WakeEndDistance, SegmentEnd) - Segment.StartDistance) / Segment.Length, 0.0f, 1.0f);
-					SetSplineSegment(
-						Segment.WakeSpline,
+					const float LocalEndAlpha   = FMath::Clamp((FMath::Min(WakeEndDistance,   SegmentEnd)             - Segment.StartDistance) / Segment.Length, 0.0f, 1.0f);
+					SetSplineSegment(Segment.WakeSpline,
 						FMath::Lerp(Segment.Start, Segment.End, LocalStartAlpha),
 						FMath::Lerp(Segment.Start, Segment.End, LocalEndAlpha),
 						4.5f * WakeRadiusScale,
@@ -701,14 +902,60 @@ void ASecondarySearchVisualizerActor::UpdatePathLayers(float DeltaSeconds, float
 
 void ASecondarySearchVisualizerActor::UpdateTargetPulse(float DeltaSeconds, float WorldSeconds)
 {
-	if (!bHasTargetLocation || !bHasSmoothedTargetLocation)
+	const float SmoothAlpha = 1.0f - FMath::Exp(-FMath::Max(DeltaSeconds, 0.016f) * CachedTargetSmoothing);
+	if (bHasTargetLocation && bHasSmoothedTargetLocation)
+	{
+		SmoothedTargetLocation = FMath::Lerp(SmoothedTargetLocation, DesiredTargetLocation, SmoothAlpha);
+	}
+	if (bHasGoalLocation && bHasSmoothedGoalLocation)
+	{
+		const float MotionDist = FVector::Dist(SmoothedGoalLocation, DesiredGoalLocation);
+		if (MotionDist > 15.0f)
+		{
+			TriggerRippleAt(SmoothedGoalLocation, FMath::Min(1.0f, MotionDist / 100.0f), 450.0f);
+		}
+	}
+
+	if (bHasStartLocation && bHasSmoothedStartLocation)
+	{
+		SmoothedStartLocation = FMath::Lerp(SmoothedStartLocation, DesiredStartLocation, SmoothAlpha);
+	}
+	if (bHasGoalLocation && bHasSmoothedGoalLocation)
+	{
+		SmoothedGoalLocation = FMath::Lerp(SmoothedGoalLocation, DesiredGoalLocation, SmoothAlpha);
+	}
+
+	if (!bHasTargetLocation && !bHasStartLocation && !bHasGoalLocation)
 	{
 		return;
 	}
 
-	const float Pulse = 1.0f + 0.14f * CachedNodePulse * FMath::Sin(WorldSeconds * 5.0f * CachedVisualSpeed);
-	TargetMarker->ClearInstances();
-	AddWorldInstance(TargetMarker, MakeDiskTransform(SmoothedTargetLocation, CachedTargetRadius * CachedNodeScale * Pulse, 2.0f, CachedTargetZOffset + 8.0f));
+	const float BaseFreq = 3.6f * CachedVisualSpeed;
+	const float SineA = FMath::Sin(WorldSeconds * BaseFreq);
+	const float SineB = FMath::Sin(WorldSeconds * BaseFreq * 0.35f);
+	const float Pulse = 1.0f + 0.14f * CachedNodePulse * (SineA * 0.8f + SineB * 0.2f);
+	
+	const float BobFreq = 1.1f * CachedVisualSpeed;
+	const float RawBobA = FMath::Sin(WorldSeconds * BobFreq);
+	const float RawBobB = FMath::Sin(WorldSeconds * BobFreq * 0.62f);
+	const float SmoothBobA = RawBobA * RawBobA * (3.0f - 2.0f * FMath::Abs(RawBobA)) * FMath::Sign(RawBobA);
+	const float SmoothBobB = RawBobB * RawBobB * (3.0f - 2.0f * FMath::Abs(RawBobB)) * FMath::Sign(RawBobB);
+	const float VerticalWobble = (SmoothBobA * 4.0f + SmoothBobB * 2.0f) * CachedNodePulse;
+	if (bHasStartLocation && bHasSmoothedStartLocation)
+	{
+		StartMarker->ClearInstances();
+		AddWorldInstance(StartMarker, MakeSphereTransform(SmoothedStartLocation, CachedTargetRadius * CachedNodeScale * 0.82f, CachedTargetZOffset + 18.0f + VerticalWobble));
+	}
+	if (bHasTargetLocation && bHasSmoothedTargetLocation)
+	{
+		TargetMarker->ClearInstances();
+		AddWorldInstance(TargetMarker, MakeDiskTransform(SmoothedTargetLocation, CachedTargetRadius * CachedNodeScale * Pulse, 2.0f, CachedTargetZOffset + 8.0f + VerticalWobble));
+	}
+	if (bHasGoalLocation && bHasSmoothedGoalLocation)
+	{
+		GoalMarker->ClearInstances();
+		AddWorldInstance(GoalMarker, MakeSphereTransform(SmoothedGoalLocation, CachedTargetRadius * CachedNodeScale * 0.9f, CachedTargetZOffset + 18.0f + VerticalWobble));
+	}
 	if (TargetMaterial)
 	{
 		TargetMaterial->SetScalarParameterValue(TEXT("Opacity"), 0.85f);
@@ -716,12 +963,27 @@ void ASecondarySearchVisualizerActor::UpdateTargetPulse(float DeltaSeconds, floa
 		TargetMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), CachedGlowIntensity);
 		TargetMaterial->SetScalarParameterValue(TEXT("WavePhase"), WorldSeconds * CachedVisualSpeed);
 	}
+	if (StartMaterial)
+	{
+		StartMaterial->SetScalarParameterValue(TEXT("Opacity"), 0.88f);
+		StartMaterial->SetScalarParameterValue(TEXT("Pulse"), Pulse * 0.85f);
+		StartMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), CachedGlowIntensity * 1.1f);
+		StartMaterial->SetScalarParameterValue(TEXT("WavePhase"), WorldSeconds * CachedVisualSpeed * 0.8f);
+	}
+	if (GoalMaterial)
+	{
+		GoalMaterial->SetScalarParameterValue(TEXT("Opacity"), 0.9f);
+		GoalMaterial->SetScalarParameterValue(TEXT("Pulse"), Pulse * 0.9f);
+		GoalMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), CachedGlowIntensity * 1.15f);
+		GoalMaterial->SetScalarParameterValue(TEXT("WavePhase"), WorldSeconds * CachedVisualSpeed * 0.9f);
+	}
 }
 
 void ASecondarySearchVisualizerActor::ResetRetainedState()
 {
 	RetainedNodes.Reset();
 	RetainedNodeKeys.Reset();
+	AnimatedAtomKeys.Reset();
 }
 
 void ASecondarySearchVisualizerActor::ClearPathLayers()
@@ -731,6 +993,7 @@ void ASecondarySearchVisualizerActor::ClearPathLayers()
 		ReleasePathLayer(Layer);
 	}
 	PathLayers.Reset();
+	PathLayerMaterials.Reset();
 }
 
 void ASecondarySearchVisualizerActor::ReleasePathLayer(FPathLayer& Layer)
@@ -919,8 +1182,8 @@ void ASecondarySearchVisualizerActor::SetSplineSegment(USplineMeshComponent* Spl
 	{
 		return;
 	}
-	const FVector LocalStart = GetActorTransform().InverseTransformPosition(Start + FVector(0.0f, 0.0f, 96.0f));
-	const FVector LocalEnd = GetActorTransform().InverseTransformPosition(End + FVector(0.0f, 0.0f, 96.0f));
+	const FVector LocalStart = GetActorTransform().InverseTransformPosition(Start + FVector(0.0f, 0.0f, CachedTargetZOffset + 16.0f));
+	const FVector LocalEnd = GetActorTransform().InverseTransformPosition(End + FVector(0.0f, 0.0f, CachedTargetZOffset + 16.0f));
 	const FVector Direction = (LocalEnd - LocalStart).GetSafeNormal();
 	const FVector Tangent = Direction * FVector::Dist(LocalStart, LocalEnd) * 0.5f;
 	Spline->SetStartScale(FVector2D(Radius / 50.0f, Radius / 50.0f));
@@ -1056,5 +1319,25 @@ bool ASecondarySearchVisualizerActor::ShouldAnimateRetainedNode(const FRetainedN
 		return false;
 	}
 	return Record.State == ERetainedNodeVisualState::Frontier ||
-		(WorldSeconds - Record.StateChangeSeconds) <= CachedNodeFadeTime;
+		(WorldSeconds - Record.StateChangeSeconds) <= CachedNodeFadeTime ||
+		(WorldSeconds - Record.LastRippleSeconds) < 0.65f ||
+		!Record.AtomOffset.IsNearlyZero();
+}
+
+void ASecondarySearchVisualizerActor::TriggerRippleAt(const FVector& Location, float Intensity, float Radius)
+{
+	const float WorldSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+	const float RadiusSq = FMath::Square(Radius);
+
+	for (auto& Pair : RetainedNodes)
+	{
+		FRetainedNodeRecord& Record = Pair.Value;
+		const float DistSq = FVector::DistSquared2D(Record.Location, Location);
+		if (DistSq < RadiusSq)
+		{
+			const float Dist = FMath::Sqrt(DistSq);
+			Record.LastRippleSeconds = WorldSeconds;
+			Record.RippleStrength = FMath::Max(Record.RippleStrength, Intensity * (1.0f - Dist / Radius));
+		}
+	}
 }
