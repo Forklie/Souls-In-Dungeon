@@ -94,11 +94,9 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 
 	bDebugSearchWasEnabled = true;
 	EnsureSecondarySearchVisualizer(AI);
+	EnsureNavMeshBounds(AI, Player);
 
 	FSecondarySearchSettings EffectiveSearchSettings = BuildSecondarySearchSettings();
-	const float DistToPlayer = FVector::Dist(AI->GetActorLocation(), Player->GetActorLocation());
-	EffectiveSearchSettings.MaxSearchDistance = FMath::Max(EffectiveSearchSettings.MaxSearchDistance, DistToPlayer * 1.5f);
-	EffectiveSearchSettings.MaxExpandedNodes = FMath::Max(EffectiveSearchSettings.MaxExpandedNodes, FMath::CeilToInt((DistToPlayer * 3.0f) / EffectiveSearchSettings.CellSize) * 20);
 
 	if (FSecondarySearchDebug::ConsumeClearRequested())
 	{
@@ -124,6 +122,11 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 	{
 		RebuildDebugBaseGrid(AI->GetActorLocation(), EffectiveSearchSettings);
 	}
+
+	const float DistToPlayer = FVector::Dist(AI->GetActorLocation(), Player->GetActorLocation());
+	EffectiveSearchSettings.MaxSearchDistance = FMath::Max(EffectiveSearchSettings.MaxSearchDistance, DistToPlayer * 3.0f + 2000.0f);
+	const int32 RequiredNodes = FMath::Clamp(FMath::CeilToInt(FMath::Square(DistToPlayer / EffectiveSearchSettings.CellSize) * 0.1f), 10000, 100000);
+	EffectiveSearchSettings.MaxExpandedNodes = FMath::Max(EffectiveSearchSettings.MaxExpandedNodes, RequiredNodes);
 
 	FVector SearchGoalLocation = Player->GetActorLocation();
 	if (UNavigationSystemV1* NavSystem = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld()))
@@ -391,6 +394,68 @@ void AMyAIController::EnsureSecondarySearchVisualizer(APawn* AI)
 		FRotator::ZeroRotator,
 		SpawnParameters);
 #endif
+}
+
+void AMyAIController::EnsureNavMeshBounds(APawn* AI, APawn* Player)
+{
+	UWorld* World = GetWorld();
+	if (!World || !AI || !Player) return;
+
+	const FVector CurrentAIPos = AI->GetActorLocation();
+	const FVector CurrentPlayerPos = Player->GetActorLocation();
+
+	// Avoid excessive nav-rebuilds by checking distance thresholds
+	if (FVector::DistSquared(CurrentAIPos, LastNavCheckAIPos) < 250000.0f && 
+		FVector::DistSquared(CurrentPlayerPos, LastNavCheckPlayerPos) < 250000.0f)
+	{
+		return;
+	}
+	
+	LastNavCheckAIPos = CurrentAIPos;
+	LastNavCheckPlayerPos = CurrentPlayerPos;
+
+	ANavMeshBoundsVolume* BestVolume = nullptr;
+	float MaxVolSize = -1.0f;
+
+	for (TActorIterator<ANavMeshBoundsVolume> It(World); It; ++It)
+	{
+		const float VolSize = It->GetComponentsBoundingBox(true).GetSize().Size();
+		if (VolSize > MaxVolSize)
+		{
+			MaxVolSize = VolSize;
+			BestVolume = *It;
+		}
+	}
+
+	if (BestVolume)
+	{
+		const FBox CurrentBounds = BestVolume->GetComponentsBoundingBox(true);
+		const float Margin = 2000.0f;
+		
+		if (!CurrentBounds.IsInside(CurrentAIPos) || !CurrentBounds.IsInside(CurrentPlayerPos))
+		{
+			FBox NeededBounds(0);
+			NeededBounds += CurrentAIPos;
+			NeededBounds += CurrentPlayerPos;
+			NeededBounds = NeededBounds.ExpandBy(FVector(Margin, Margin, 1000.0f));
+			
+			FBox NewFullBounds = CurrentBounds + NeededBounds;
+			FVector NewCenter = NewFullBounds.GetCenter();
+			FVector NewExtent = NewFullBounds.GetExtent();
+			
+			FVector OriginalExtent = CurrentBounds.GetExtent();
+			FVector OriginalScale = BestVolume->GetActorScale3D();
+			
+			BestVolume->SetActorLocation(NewCenter);
+			
+			FVector TargetScale = OriginalScale;
+			if (OriginalExtent.X > 1.0f) TargetScale.X = (NewExtent.X / OriginalExtent.X) * OriginalScale.X;
+			if (OriginalExtent.Y > 1.0f) TargetScale.Y = (NewExtent.Y / OriginalExtent.Y) * OriginalScale.Y;
+			if (OriginalExtent.Z > 1.0f) TargetScale.Z = (NewExtent.Z / OriginalExtent.Z) * OriginalScale.Z;
+			
+			BestVolume->SetActorScale3D(TargetScale);
+		}
+	}
 }
 
 void AMyAIController::HideSecondarySearchVisualizer()

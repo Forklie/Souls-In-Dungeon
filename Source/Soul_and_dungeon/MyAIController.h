@@ -27,6 +27,7 @@ private:
 	void RebuildDebugBaseGrid(const FVector& CenterLocation, const FSecondarySearchSettings& Settings);
 	void EnsureSecondarySearchVisualizer(APawn* AI);
 	void HideSecondarySearchVisualizer();
+	void EnsureNavMeshBounds(APawn* AI, APawn* Player);
 	void SetAttackAnimationState(UAnimInstance* AnimInstance, bool bIsAttacking) const;
 
 	float StopDistance = 150.0f;
@@ -61,4 +62,6 @@ private:
 	FVector LastBaseGridCenter = FVector::ZeroVector;
 	bool bHasSearchResult = false;
 	bool bDebugSearchWasEnabled = false;
+	FVector LastNavCheckAIPos = FVector::ZeroVector;
+	FVector LastNavCheckPlayerPos = FVector::ZeroVector;
 };
