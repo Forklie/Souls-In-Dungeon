@@ -216,7 +216,7 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 FSecondarySearchSettings AMyAIController::BuildSecondarySearchSettings() const
 {
 	FSecondarySearchSettings Settings = SecondarySearchSettings;
-	Settings.CellSize = FMath::Clamp(FSecondarySearchDebug::GetCellSize(), 35.0f, 200.0f);
+	Settings.CellSize = FMath::Clamp(FSecondarySearchDebug::GetCellSize(), 30.0f, 200.0f);
 	Settings.MaxSearchDistance = FMath::Clamp(FSecondarySearchDebug::GetFieldRadius(), 1000.0f, 8000.0f);
 	const float ProjectionRadius = FMath::Max(80.0f, Settings.CellSize * 1.25f);
 	Settings.ProjectionExtent = FVector(ProjectionRadius, ProjectionRadius, 300.0f);

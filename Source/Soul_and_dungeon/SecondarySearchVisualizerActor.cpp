@@ -71,7 +71,7 @@ void ASecondarySearchVisualizerActor::BeginPlay()
 {
 	Super::BeginPlay();
 
-	BaseGridMaterial = CreateColorMaterial(BaseMaterial, FLinearColor(0.015f, 0.08f, 0.32f, 0.24f), TEXT("BaseGridMaterial"));
+	BaseGridMaterial = CreateColorMaterial(BaseMaterial, FLinearColor(0.03f, 0.34f, 0.95f, 0.5f), TEXT("BaseGridMaterial"));
 	ExpandedMaterial = CreateColorMaterial(BaseMaterial, FLinearColor(0.04f, 0.18f, 0.85f, 0.65f), TEXT("ExpandedMaterial"));
 	FrontierMaterial = CreateColorMaterial(BaseMaterial, FLinearColor(0.0f, 0.95f, 1.0f, 0.92f), TEXT("FrontierMaterial"));
 	StartMaterial = CreateColorMaterial(BaseMaterial, FLinearColor(0.0f, 1.0f, 0.15f, 1.0f), TEXT("StartMaterial"));
@@ -335,7 +335,7 @@ void ASecondarySearchVisualizerActor::UpdateBaseGridInstances(const FSecondarySe
 	RetainedNodes.Reserve(DrawCount);
 	RetainedNodeKeys.Reserve(DrawCount);
 
-	const float BaseRadius = FMath::Max(4.0f, Settings.DebugExpandedNodeRadius * 0.42f * CachedNodeScale);
+	const float BaseRadius = FMath::Max(5.5f, Settings.DebugExpandedNodeRadius * 0.58f * CachedNodeScale);
 	const float ExpandedRadius = FMath::Max(5.0f, Settings.DebugExpandedNodeRadius * CachedNodeScale);
 	const float FrontierRadius = FMath::Max(6.0f, Settings.DebugFrontierNodeRadius * CachedNodeScale);
 
@@ -502,10 +502,11 @@ void ASecondarySearchVisualizerActor::UpdateFluidAnimation(float DeltaSeconds, f
 	const float QualityScale = GetQualityScale();
 	if (BaseGridMaterial)
 	{
-		BaseGridMaterial->SetScalarParameterValue(TEXT("Opacity"), 0.18f + CachedGlowIntensity * 0.03f);
-		BaseGridMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), 0.16f);
+		BaseGridMaterial->SetVectorParameterValue(TEXT("DebugColor"), FLinearColor(0.03f, 0.34f, 0.95f, 1.0f));
+		BaseGridMaterial->SetScalarParameterValue(TEXT("Opacity"), 0.42f + CachedGlowIntensity * 0.06f);
+		BaseGridMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), 0.34f);
 		BaseGridMaterial->SetScalarParameterValue(TEXT("SoftFalloff"), CachedNodeSoftness);
-		BaseGridMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), 0.35f * CachedGlowIntensity);
+		BaseGridMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), 0.7f * CachedGlowIntensity);
 		BaseGridMaterial->SetScalarParameterValue(TEXT("WavePhase"), WorldSeconds * 0.2f);
 	}
 	if (FrontierMaterial)
