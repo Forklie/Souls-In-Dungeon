@@ -8,6 +8,44 @@
 class UAnimInstance;
 class ASecondarySearchVisualizerActor;
 
+UENUM(BlueprintType)
+enum class EEnemyNavigationMode : uint8
+{
+	AStarOnly,
+	SmoothedAStar,
+	LearningWithAStarFallback
+};
+
+USTRUCT(BlueprintType)
+struct FEnemyLearningObservation
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Learning")
+	FVector DirectionToPlayer = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Learning")
+	FVector DirectionToPath = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Learning")
+	FVector Velocity = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Learning")
+	float DistanceToPlayer = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Learning")
+	float DistanceToPathTarget = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Learning")
+	float StuckSeconds = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Learning")
+	float PathProgress = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Learning")
+	bool bHasLineOfSight = false;
+};
+
 UCLASS()
 class SOUL_AND_DUNGEON_API AMyAIController : public AAIController
 {
@@ -16,10 +54,22 @@ class SOUL_AND_DUNGEON_API AMyAIController : public AAIController
 public:
 	AMyAIController();
 
+	void GetEnemyLearningObservation(FEnemyLearningObservation& OutObservation) const;
+	void ApplyLearningSteeringInput(const FVector2D& MoveInput);
+
 protected:
 	virtual void Tick(float DeltaTime) override;
 
 private:
+	void UpdateAStarNavigation(APawn* AI, APawn* Player, float CurrentTime, float DeltaTime);
+	void ResetAStarNavigation();
+	bool ShouldReplanAStarPath(const FVector& AILocation, const FVector& GoalLocation, float CurrentTime, const FSecondarySearchSettings& Settings) const;
+	bool BuildAStarPath(APawn* AI, const FVector& GoalLocation, const FSecondarySearchSettings& Settings);
+	bool BuildSmoothedPath(const TArray<FVector>& RawPath, const FSecondarySearchSettings& Settings, TArray<FVector>& OutPath) const;
+	bool HasClearNavigationSegment(const FVector& From, const FVector& To) const;
+	FVector CalculatePathFollowTarget(const FVector& AILocation, TArray<FVector>& Path, int32& WaypointIndex, const FSecondarySearchSettings& Settings) const;
+	void UpdateNavigationMetrics(APawn* AI, APawn* Player, const FVector& PathTarget, float DeltaTime, bool bUsedFallback);
+	EEnemyNavigationMode GetNavigationMode() const;
 	void UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float CurrentTime);
 	FSecondarySearchSettings BuildSecondarySearchSettings() const;
 	bool ShouldRefreshSearchDebug(const FVector& GoalLocation, float CurrentTime, ESecondarySearchMode SearchMode, const FSecondarySearchSettings& Settings) const;
@@ -32,10 +82,25 @@ private:
 
 	float StopDistance = 150.0f;
 
-	float DamageCooldown = 3.0f;
-	float LastDamageTime = 0.0f;
-	float AttackDelay = 0.5f;
-	float LastAttackStartTime = 0.0f;
+
+
+	TArray<FVector> ActiveAStarPath;
+	TArray<FVector> ActiveSmoothedPath;
+	int32 ActiveAStarWaypointIndex = 0;
+	int32 ActiveSmoothedWaypointIndex = 0;
+	FVector LastAStarGoal = FVector::ZeroVector;
+	float LastAStarReplanTime = -1000000.0f;
+	float AStarReplanInterval = 0.35f;
+	float SmoothedPathLookAheadDistance = 260.0f;
+	float LearningSteeringProjectionDistance = 260.0f;
+	FVector2D LastLearningSteeringInput = FVector2D::ZeroVector;
+	float LastLearningSteeringTime = -1000000.0f;
+	float LearningSteeringMaxAge = 0.25f;
+	FEnemyLearningObservation LastLearningObservation;
+	FVector LastNavigationLocation = FVector::ZeroVector;
+	float StuckSeconds = 0.0f;
+	float LastPathProgress = 0.0f;
+	int32 AStarFallbackCount = 0;
 
 	FSecondarySearchSettings SecondarySearchSettings;
 	FSecondarySearchSettings ActiveSecondarySearchSettings;
