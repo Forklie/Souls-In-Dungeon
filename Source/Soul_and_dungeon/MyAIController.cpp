@@ -41,17 +41,33 @@ void AMyAIController::GetEnemyLearningObservation(FEnemyLearningObservation& Out
 	OutObservation = LastLearningObservation;
 }
 
+FVector2D AMyAIController::GetExpertLearningSteeringDirection() const
+{
+	const FVector PathDirection = LastLearningObservation.DirectionToPath.GetSafeNormal2D();
+	return FVector2D(PathDirection.X, PathDirection.Y).GetClampedToMaxSize(1.0f);
+}
+
 void AMyAIController::ApplyLearningSteeringInput(const FVector2D& MoveInput)
 {
 	LastLearningSteeringInput = MoveInput.GetClampedToMaxSize(1.0f);
 	LastLearningSteeringTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
 }
 
+int32 AMyAIController::GetAStarFallbackCount() const
+{
+	return AStarFallbackCount;
+}
+
+void AMyAIController::SetLearningTrainingPlayer(APawn* Player)
+{
+	LearningTrainingPlayer = Player;
+}
+
 void AMyAIController::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
-	APawn* Player = UGameplayStatics::GetPlayerPawn(GetWorld(), 0);
+	APawn* Player = LearningTrainingPlayer.IsValid() ? LearningTrainingPlayer.Get() : UGameplayStatics::GetPlayerPawn(GetWorld(), 0);
 	APawn* AI = GetPawn();
 	if (!Player || !AI)
 	{

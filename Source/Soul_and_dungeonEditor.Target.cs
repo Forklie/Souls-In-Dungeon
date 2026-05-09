@@ -11,5 +11,6 @@ public class Soul_and_dungeonEditorTarget : TargetRules
 		DefaultBuildSettings = BuildSettingsVersion.V6;
 		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_7;
 		ExtraModuleNames.Add("Soul_and_dungeon");
+		ExtraModuleNames.Add("Soul_and_dungeonEditor");
 	}
 }

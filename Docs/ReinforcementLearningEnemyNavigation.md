@@ -9,6 +9,13 @@
 - `Source/Soul_and_dungeon/MyAIController.cpp`
 - `Source/Soul_and_dungeon/EnemyLearningInteractor.h`
 - `Source/Soul_and_dungeon/EnemyLearningInteractor.cpp`
+- `Source/Soul_and_dungeonEditor.Target.cs`
+- `Source/Soul_and_dungeonEditor/Soul_and_dungeonEditor.Build.cs`
+- `Source/Soul_and_dungeonEditor/Soul_and_dungeonEditorModule.cpp`
+- `Source/Soul_and_dungeonEditor/EnemyLearningTrainingEnvironment.h`
+- `Source/Soul_and_dungeonEditor/EnemyLearningTrainingEnvironment.cpp`
+- `Source/Soul_and_dungeonEditor/EnemyLearningTrainCommandlet.h`
+- `Source/Soul_and_dungeonEditor/EnemyLearningTrainCommandlet.cpp`
 - `Docs/AStarNavigationHandoff.md`
 - `Docs/ReinforcementLearningEnemyNavigation.md`
 
@@ -81,6 +88,41 @@ After imitation produces stable local steering, fine-tune with PPO:
 | Collision/no-progress penalty | Discourage pushing into obstacles |
 | Timeout penalty | End failed chase episodes |
 
+## Automated PPO training commandlet
+
+The editor-only commandlet `EnemyLearningTrain` runs the PPO loop without manually opening PIE. It loads the map, finds or spawns a training player/enemy pair, drives `AMyAIController` in `LearningWithAStarFallback` mode, and writes a JSON summary to `Saved/EnemyLearning/TrainingSummary.json`.
+
+It also registers the Learning Agents and `NNERuntimeBasicCpu` Python paths before launching the trainer subprocess. This is required in macOS commandlet runs because the trainer imports `nne_runtime_basic_cpu_pytorch` when it receives the policy network.
+
+Run a short smoke test:
+
+```sh
+"/Users/Shared/Epic Games/UE_5.7/Engine/Binaries/Mac/UnrealEditor-Cmd" \
+  "/Users/chaturnakasturiratna/Documents/Unreal Projects/Souls-In-Dungeon/Soul_and_dungeon.uproject" \
+  -run=EnemyLearningTrain \
+  -Map=/Game/ThirdPerson/Lvl_ThirdPerson \
+  -Steps=5 \
+  -Iterations=1 \
+  -OutputPolicy=/Game/AI/Learning/NN_EnemySteering_Smoke \
+  -unattended -nop4
+```
+
+Run a longer local training pass:
+
+```sh
+"/Users/Shared/Epic Games/UE_5.7/Engine/Binaries/Mac/UnrealEditor-Cmd" \
+  "/Users/chaturnakasturiratna/Documents/Unreal Projects/Souls-In-Dungeon/Soul_and_dungeon.uproject" \
+  -run=EnemyLearningTrain \
+  -Map=/Game/ThirdPerson/Lvl_ThirdPerson \
+  -Steps=50000 \
+  -Iterations=100 \
+  -MaxEpisodeSteps=1200 \
+  -OutputPolicy=/Game/AI/Learning/NN_EnemySteering \
+  -unattended -nop4
+```
+
+The saved policy asset is the trained neural network. The current runtime still treats Learning mode as optional and falls back to smoothed A* if no policy-driven action is active.
+
 ## Test steps
 
 1. Build:
@@ -100,12 +142,13 @@ After imitation produces stable local steering, fine-tune with PPO:
    - `sd.EnemyNavigation.Mode 1`: default smoothed A* reaches attack range with less zig-zag.
    - `sd.EnemyNavigation.Mode 2`: behaves like smoothed A* unless a Learning Agents policy is actively providing actions.
 
-4. Toggle search debug:
+4. Run the commandlet smoke test above. A passing run should finish with `Success - 0 error(s)` and `policy save succeeded`.
+
+5. Toggle search debug:
 
    ```text
    sd.SearchDebug.Toggle
    sd.SearchDebug.Mode AStar
    ```
 
-5. Compare against UCS in the debug HUD. A* should keep a similar path cost while expanding fewer nodes in typical cases.
-
+6. Compare against UCS in the debug HUD. A* should keep a similar path cost while expanding fewer nodes in typical cases.

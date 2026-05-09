@@ -55,7 +55,10 @@ public:
 	AMyAIController();
 
 	void GetEnemyLearningObservation(FEnemyLearningObservation& OutObservation) const;
+	FVector2D GetExpertLearningSteeringDirection() const;
 	void ApplyLearningSteeringInput(const FVector2D& MoveInput);
+	int32 GetAStarFallbackCount() const;
+	void SetLearningTrainingPlayer(APawn* Player);
 
 protected:
 	virtual void Tick(float DeltaTime) override;
@@ -97,6 +100,7 @@ private:
 	float LastLearningSteeringTime = -1000000.0f;
 	float LearningSteeringMaxAge = 0.25f;
 	FEnemyLearningObservation LastLearningObservation;
+	TWeakObjectPtr<APawn> LearningTrainingPlayer;
 	FVector LastNavigationLocation = FVector::ZeroVector;
 	float StuckSeconds = 0.0f;
 	float LastPathProgress = 0.0f;
