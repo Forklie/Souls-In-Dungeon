@@ -78,12 +78,15 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 
 	if (!FSecondarySearchDebug::IsEnabled())
 	{
-		if (bDebugSearchWasEnabled || SearchTask.IsActive() || AStarPreviewTask.IsActive() || bHasSearchResult)
+		if (bDebugSearchWasEnabled || BFSTask.IsActive() || UCSTask.IsActive() || AStarTask.IsActive() || bHasSearchResult)
 		{
-			SearchTask.Reset();
-			AStarPreviewTask.Reset();
+			BFSTask.Reset();
+			UCSTask.Reset();
+			AStarTask.Reset();
+			BFSResult = FSecondarySearchResult();
+			UCSResult = FSecondarySearchResult();
+			AStarResult = FSecondarySearchResult();
 			LastSearchResult = FSecondarySearchResult();
-			LastAStarPreviewResult = FSecondarySearchResult();
 			DebugBaseGridNodes.Reset();
 			bHasSearchResult = false;
 			bDebugSearchWasEnabled = false;
@@ -100,10 +103,13 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 
 	if (FSecondarySearchDebug::ConsumeClearRequested())
 	{
-		SearchTask.Reset();
-		AStarPreviewTask.Reset();
+		BFSTask.Reset();
+		UCSTask.Reset();
+		AStarTask.Reset();
+		BFSResult = FSecondarySearchResult();
+		UCSResult = FSecondarySearchResult();
+		AStarResult = FSecondarySearchResult();
 		LastSearchResult = FSecondarySearchResult();
-		LastAStarPreviewResult = FSecondarySearchResult();
 		DebugBaseGridNodes.Reset();
 		LastSearchFailureReason.Empty();
 		bHasSearchResult = false;
@@ -160,7 +166,7 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 	}
 
 	const ESecondarySearchMode SearchMode = FSecondarySearchDebug::GetMode();
-	if (!SearchTask.IsActive() && ShouldRefreshSearchDebug(SearchGoalLocation, CurrentTime, SearchMode, EffectiveSearchSettings))
+	if (!BFSTask.IsActive() && !UCSTask.IsActive() && !AStarTask.IsActive() && ShouldRefreshSearchDebug(SearchGoalLocation, CurrentTime, SearchMode, EffectiveSearchSettings))
 	{
 		LastSearchMode = SearchMode;
 		LastSearchGoal = SearchGoalLocation;
@@ -168,44 +174,62 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 		LastDebugRevision = FSecondarySearchDebug::GetRevision();
 		ActiveSecondarySearchSettings = EffectiveSearchSettings;
 
-		SearchTask.Start(
-			GetWorld(),
-			AI->GetActorLocation(),
-			SearchGoalLocation,
-			SearchMode,
-			ActiveSecondarySearchSettings);
-
-		if (SearchMode == ESecondarySearchMode::AStar)
-		{
-			AStarPreviewTask.Reset();
-		}
-		else
-		{
-			AStarPreviewTask.Start(
-				GetWorld(),
-				AI->GetActorLocation(),
-				SearchGoalLocation,
-				ESecondarySearchMode::AStar,
-				ActiveSecondarySearchSettings);
-		}
+		BFSTask.Start(GetWorld(), AI->GetActorLocation(), SearchGoalLocation, ESecondarySearchMode::BFS, ActiveSecondarySearchSettings);
+		UCSTask.Start(GetWorld(), AI->GetActorLocation(), SearchGoalLocation, ESecondarySearchMode::UCS, ActiveSecondarySearchSettings);
+		AStarTask.Start(GetWorld(), AI->GetActorLocation(), SearchGoalLocation, ESecondarySearchMode::AStar, ActiveSecondarySearchSettings);
 	}
 
-	const FSecondarySearchSettings& StepSettings = SearchTask.IsActive() ? ActiveSecondarySearchSettings : EffectiveSearchSettings;
-	SearchTask.Step(GetWorld(), StepSettings, StepSettings.MaxDebugSearchStepsPerTick);
-	AStarPreviewTask.Step(GetWorld(), StepSettings, FMath::Clamp(StepSettings.MaxDebugSearchStepsPerTick / 4, 8, 32));
+	const FSecondarySearchSettings& StepSettings = ActiveSecondarySearchSettings;
+	BFSTask.Step(GetWorld(), StepSettings, StepSettings.MaxDebugSearchStepsPerTick);
+	UCSTask.Step(GetWorld(), StepSettings, StepSettings.MaxDebugSearchStepsPerTick);
+	AStarTask.Step(GetWorld(), StepSettings, StepSettings.MaxDebugSearchStepsPerTick);
 
-	LastSearchResult = SearchTask.BuildDebugResult();
-	LastAStarPreviewResult = AStarPreviewTask.BuildDebugResult();
-	if (LastAStarPreviewResult.bSuccess)
+	BFSResult = BFSTask.BuildDebugResult();
+	UCSResult = UCSTask.BuildDebugResult();
+	AStarResult = AStarTask.BuildDebugResult();
+
+	// Select the "Main" result based on current debug mode for expansion/frontier drawing
+	switch (SearchMode)
 	{
-		LastSearchResult.PreviewPath = LastAStarPreviewResult.Path;
+		case ESecondarySearchMode::BFS: LastSearchResult = BFSResult; break;
+		case ESecondarySearchMode::UCS: LastSearchResult = UCSResult; break;
+		case ESecondarySearchMode::AStar: LastSearchResult = AStarResult; break;
+	}
+
+	// Always populate specific algorithm paths
+	LastSearchResult.BFSPath = BFSResult.Path;
+	LastSearchResult.UCSPath = UCSResult.Path;
+	LastSearchResult.AStarPath = AStarResult.Path;
+
+	// Populate metrics
+	LastSearchResult.BFSCount = BFSResult.ExpandedCount;
+	LastSearchResult.UCSCount = UCSResult.ExpandedCount;
+	LastSearchResult.AStarCount = AStarResult.ExpandedCount;
+	LastSearchResult.BFSMs = BFSResult.ElapsedMs;
+	LastSearchResult.UCSMs = UCSResult.ElapsedMs;
+	LastSearchResult.AStarMs = AStarResult.ElapsedMs;
+
+	auto CalcCost = [](const TArray<FVector>& Path) -> float {
+		float Total = 0.0f;
+		for (int32 i = 1; i < Path.Num(); ++i) Total += FVector::Dist(Path[i-1], Path[i]);
+		return Total;
+	};
+	LastSearchResult.BFSCost = CalcCost(BFSResult.Path);
+	LastSearchResult.UCSCost = CalcCost(UCSResult.Path);
+	LastSearchResult.AStarCost = CalcCost(AStarResult.Path);
+
+	// Use AStar as the preview path if the main mode is something else
+	if (SearchMode != ESecondarySearchMode::AStar && AStarResult.bSuccess)
+	{
+		LastSearchResult.PreviewPath = AStarResult.Path;
 	}
 
 	LastSearchResult.SampledNodes = DebugBaseGridNodes;
 	LastSearchResult.CurrentTarget = SearchGoalLocation;
 	LastSearchResult.Mode = SearchMode;
 
-	if (SearchTask.HasResult())
+	bool bAnyFinished = BFSTask.HasResult() || UCSTask.HasResult() || AStarTask.HasResult();
+	if (bAnyFinished)
 	{
 		bHasSearchResult = true;
 		if (LastSearchResult.bSuccess)
@@ -296,6 +320,13 @@ bool AMyAIController::ShouldRebuildDebugBaseGrid(const FVector& CenterLocation, 
 		return true;
 	}
 
+	// Periodic refresh to catch door openings / navmesh updates
+	const float CurrentTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+	if ((CurrentTime - LastBaseGridRebuildTime) >= BaseGridRebuildInterval)
+	{
+		return true;
+	}
+
 	return false;
 }
 
@@ -373,6 +404,7 @@ void AMyAIController::RebuildDebugBaseGrid(const FVector& CenterLocation, const 
 	LastBaseGridCellSize = Settings.CellSize;
 	LastBaseGridRadius = Settings.MaxSearchDistance;
 	LastBaseGridCenter = CenterLocation;
+	LastBaseGridRebuildTime = World->GetTimeSeconds();
 }
 
 void AMyAIController::EnsureSecondarySearchVisualizer(APawn* AI)

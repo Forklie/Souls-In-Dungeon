@@ -28,6 +28,9 @@ ASecondarySearchVisualizerActor::ASecondarySearchVisualizerActor()
 	TargetMarker = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("TargetMarker"));
 	PathSegments = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("PathSegments"));
 	PreviewPathSegments = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("PreviewPathSegments"));
+	BFSPathSegments = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("BFSPathSegments"));
+	UCSPathSegments = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("UCSPathSegments"));
+	AStarPathSegments = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("AStarPathSegments"));
 
 	BaseGridNodes->SetupAttachment(SceneRoot);
 	ExpandedNodes->SetupAttachment(SceneRoot);
@@ -37,6 +40,9 @@ ASecondarySearchVisualizerActor::ASecondarySearchVisualizerActor()
 	TargetMarker->SetupAttachment(SceneRoot);
 	PathSegments->SetupAttachment(SceneRoot);
 	PreviewPathSegments->SetupAttachment(SceneRoot);
+	BFSPathSegments->SetupAttachment(SceneRoot);
+	UCSPathSegments->SetupAttachment(SceneRoot);
+	AStarPathSegments->SetupAttachment(SceneRoot);
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CylinderAsset(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereAsset(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
@@ -63,6 +69,9 @@ ASecondarySearchVisualizerActor::ASecondarySearchVisualizerActor()
 	ConfigureComponent(TargetMarker, CylinderMesh);
 	ConfigureComponent(PathSegments, CylinderMesh);
 	ConfigureComponent(PreviewPathSegments, CylinderMesh);
+	ConfigureComponent(BFSPathSegments, CylinderMesh);
+	ConfigureComponent(UCSPathSegments, CylinderMesh);
+	ConfigureComponent(AStarPathSegments, CylinderMesh);
 
 	SetActorHiddenInGame(true);
 }
@@ -79,6 +88,9 @@ void ASecondarySearchVisualizerActor::BeginPlay()
 	TargetMaterial = CreateColorMaterial(BaseMaterial, FLinearColor::White, TEXT("TargetMaterial"));
 	PathMaterial = CreateColorMaterial(PathBaseMaterial, FLinearColor(1.0f, 0.55f, 0.0f, 1.0f), TEXT("PathMaterial"));
 	PreviewPathMaterial = CreateColorMaterial(PathBaseMaterial, FLinearColor(0.85f, 0.18f, 1.0f, 0.55f), TEXT("PreviewPathMaterial"));
+	BFSMaterial = CreateColorMaterial(PathBaseMaterial, FLinearColor(0.0f, 1.0f, 0.0f, 0.6f), TEXT("BFSMaterial"));
+	UCSMaterial = CreateColorMaterial(PathBaseMaterial, FLinearColor(0.0f, 0.2f, 1.0f, 0.6f), TEXT("UCSMaterial"));
+	AStarMaterial = CreateColorMaterial(PathBaseMaterial, FLinearColor(1.0f, 0.0f, 0.0f, 0.6f), TEXT("AStarMaterial"));
 
 	BaseGridNodes->SetMaterial(0, BaseGridMaterial);
 	ExpandedNodes->SetMaterial(0, ExpandedMaterial);
@@ -88,6 +100,9 @@ void ASecondarySearchVisualizerActor::BeginPlay()
 	TargetMarker->SetMaterial(0, TargetMaterial);
 	PathSegments->SetMaterial(0, PathMaterial);
 	PreviewPathSegments->SetMaterial(0, PreviewPathMaterial);
+	BFSPathSegments->SetMaterial(0, BFSMaterial);
+	UCSPathSegments->SetMaterial(0, UCSMaterial);
+	AStarPathSegments->SetMaterial(0, AStarMaterial);
 }
 
 void ASecondarySearchVisualizerActor::Tick(float DeltaSeconds)
@@ -243,6 +258,22 @@ void ASecondarySearchVisualizerActor::UpdateVisualization(
 		LastPreviewLayerGeneration = Result.SearchGeneration;
 	}
 	UpdatePreviewPathInstances(Result, Settings, WorldSeconds);
+	
+	// Update algorithm paths
+	BFSPathSegments->ClearInstances();
+	for (int32 i = 1; i < Result.BFSPath.Num(); ++i) {
+		AddWorldInstance(BFSPathSegments, MakeTubeTransform(Result.BFSPath[i-1], Result.BFSPath[i], Settings.PathTubeRadius * 0.4f, Settings.DebugPointZOffset + 32.0f));
+	}
+	
+	UCSPathSegments->ClearInstances();
+	for (int32 i = 1; i < Result.UCSPath.Num(); ++i) {
+		AddWorldInstance(UCSPathSegments, MakeTubeTransform(Result.UCSPath[i-1], Result.UCSPath[i], Settings.PathTubeRadius * 0.4f, Settings.DebugPointZOffset + 38.0f));
+	}
+	
+	AStarPathSegments->ClearInstances();
+	for (int32 i = 1; i < Result.AStarPath.Num(); ++i) {
+		AddWorldInstance(AStarPathSegments, MakeTubeTransform(Result.AStarPath[i-1], Result.AStarPath[i], Settings.PathTubeRadius * 0.4f, Settings.DebugPointZOffset + 44.0f));
+	}
 
 	bLastTrailsEnabled = bTrailsEnabled;
 	if (!bTrailsEnabled)
@@ -264,6 +295,9 @@ void ASecondarySearchVisualizerActor::ClearVisualization()
 	TargetMarker->ClearInstances();
 	PathSegments->ClearInstances();
 	PreviewPathSegments->ClearInstances();
+	BFSPathSegments->ClearInstances();
+	UCSPathSegments->ClearInstances();
+	AStarPathSegments->ClearInstances();
 	ClearPathLayers();
 	if (GEngine)
 	{
@@ -319,6 +353,9 @@ void ASecondarySearchVisualizerActor::ApplyDepthPriority(bool bXRayEnabled)
 		TargetMarker,
 		PathSegments,
 		PreviewPathSegments,
+		BFSPathSegments,
+		UCSPathSegments,
+		AStarPathSegments,
 	};
 
 	for (UPrimitiveComponent* Component : Components)
@@ -530,13 +567,31 @@ void ASecondarySearchVisualizerActor::UpdateStatusHud(const FSecondarySearchResu
 
 	const FString Phase = Result.bSuccess ? TEXT("stable") : (Result.FailureReason.IsEmpty() ? TEXT("searching") : TEXT("fallback"));
 	const FString Message = FString::Printf(
-		TEXT("Secondary Search: %s | Gen %d | %s | Expanded %d | Base %d"),
+		TEXT("Secondary Search: %s | Gen %d | %s | Base %d"),
 		*FSecondarySearchDebug::GetModeName(Result.Mode),
 		Result.SearchGeneration,
 		*Phase,
-		Result.ExpandedCount,
 		RetainedNodes.Num());
+	
+	// Main status line
 	GEngine->AddOnScreenDebugMessage(913702, 0.18f, FColor(180, 220, 255), Message);
+
+	// Legend lines with metrics
+	const float LegendDuration = 0.18f;
+	GEngine->AddOnScreenDebugMessage(913703, LegendDuration, FColor(255, 140, 0), TEXT("  [Yellow] FINAL PATH"));
+	GEngine->AddOnScreenDebugMessage(913704, LegendDuration, FColor(215, 45, 255), TEXT("  [Pink] PREVIEW PATH"));
+	
+	GEngine->AddOnScreenDebugMessage(913705, LegendDuration, FColor::Red, FString::Printf(
+		TEXT("  [Red] A* SEARCH | Exp: %d | Time: %.2fms | Cost: %.0f"), 
+		Result.AStarCount, Result.AStarMs, Result.AStarCost));
+	
+	GEngine->AddOnScreenDebugMessage(913706, LegendDuration, FColor(0, 100, 255), FString::Printf(
+		TEXT("  [Blue] UCS SEARCH | Exp: %d | Time: %.2fms | Cost: %.0f"), 
+		Result.UCSCount, Result.UCSMs, Result.UCSCost));
+	
+	GEngine->AddOnScreenDebugMessage(913707, LegendDuration, FColor::Green, FString::Printf(
+		TEXT("  [Green] BFS SEARCH | Exp: %d | Time: %.2fms | Cost: %.0f"), 
+		Result.BFSCount, Result.BFSMs, Result.BFSCost));
 }
 
 void ASecondarySearchVisualizerActor::UpdateFluidAnimation(float DeltaSeconds, float WorldSeconds)

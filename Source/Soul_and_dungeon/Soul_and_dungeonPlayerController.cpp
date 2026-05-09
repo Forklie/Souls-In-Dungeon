@@ -45,7 +45,7 @@ void ASoul_and_dungeonPlayerController::SetupInputComponent()
 	{
 		if (InputComponent)
 		{
-			InputComponent->BindKey(EKeys::F9, IE_Pressed, this, &ASoul_and_dungeonPlayerController::ToggleSecondarySearchDebug);
+			InputComponent->BindKey(EKeys::B, IE_Pressed, this, &ASoul_and_dungeonPlayerController::ToggleSecondarySearchDebug);
 		}
 
 		// Add Input Mapping Contexts

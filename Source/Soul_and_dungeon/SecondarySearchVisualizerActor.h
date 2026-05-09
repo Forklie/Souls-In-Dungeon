@@ -177,6 +177,13 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UInstancedStaticMeshComponent> PreviewPathSegments;
+	
+	UPROPERTY()
+	TObjectPtr<UInstancedStaticMeshComponent> BFSPathSegments;
+	UPROPERTY()
+	TObjectPtr<UInstancedStaticMeshComponent> UCSPathSegments;
+	UPROPERTY()
+	TObjectPtr<UInstancedStaticMeshComponent> AStarPathSegments;
 
 	UPROPERTY()
 	TArray<TObjectPtr<USplineMeshComponent>> PathSplinePool;
@@ -219,6 +226,13 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UMaterialInstanceDynamic> PreviewPathMaterial;
+	
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> BFSMaterial;
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> UCSMaterial;
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> AStarMaterial;
 
 	UPROPERTY()
 	TArray<TObjectPtr<UMaterialInstanceDynamic>> PathLayerMaterials;

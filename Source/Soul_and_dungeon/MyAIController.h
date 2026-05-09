@@ -39,10 +39,13 @@ private:
 
 	FSecondarySearchSettings SecondarySearchSettings;
 	FSecondarySearchSettings ActiveSecondarySearchSettings;
-	FSecondarySearchTask SearchTask;
-	FSecondarySearchTask AStarPreviewTask;
+	FSecondarySearchTask BFSTask;
+	FSecondarySearchTask UCSTask;
+	FSecondarySearchTask AStarTask;
+	FSecondarySearchResult BFSResult;
+	FSecondarySearchResult UCSResult;
+	FSecondarySearchResult AStarResult;
 	FSecondarySearchResult LastSearchResult;
-	FSecondarySearchResult LastAStarPreviewResult;
 	TArray<FVector> DebugBaseGridNodes;
 
 	UPROPERTY()
@@ -60,6 +63,8 @@ private:
 	float LastBaseGridCellSize = 0.0f;
 	float LastBaseGridRadius = 0.0f;
 	FVector LastBaseGridCenter = FVector::ZeroVector;
+	float LastBaseGridRebuildTime = -1000.0f;
+	float BaseGridRebuildInterval = 0.5f;
 	bool bHasSearchResult = false;
 	bool bDebugSearchWasEnabled = false;
 	FVector LastNavCheckAIPos = FVector::ZeroVector;
