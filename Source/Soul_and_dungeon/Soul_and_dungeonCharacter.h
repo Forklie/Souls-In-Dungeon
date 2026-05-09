@@ -75,13 +75,13 @@ public:
 	virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, class AController* EventInstigator, AActor* DamageCauser) override;
 
 	// 🎬 HIT REACTION OVERLAY (drives ABP_Kino LayeredBoneBlend)
-	UPROPERTY(BlueprintReadOnly, Category = "Combat")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
 	float HitReactionOverlayWeight = 0.0f;
 
-	UPROPERTY(BlueprintReadOnly, Category = "Combat")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
 	float HitReactionOverlayWeightTarget = 0.0f;
 
-	UPROPERTY(BlueprintReadOnly, Category = "Combat")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
 	bool bHitReactionOverlay = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
