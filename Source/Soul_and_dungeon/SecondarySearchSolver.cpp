@@ -97,9 +97,20 @@ static bool IsGoalReached(const FVector& Location, const FVector& Goal, const FS
 	return FVector::Dist2D(Location, Goal) <= AcceptanceRadius;
 }
 
+static float CalculateAStarHeuristic2D(const FVector& Location, const FVector& Goal)
+{
+	return FVector::Dist2D(Location, Goal);
+}
+
 static float GetSearchPriority(ESecondarySearchMode Mode, const FVector& Location, const FVector& Goal, float CostSoFar)
 {
-	return Mode == ESecondarySearchMode::AStar ? CostSoFar + FVector::Dist2D(Location, Goal) : CostSoFar;
+	if (Mode == ESecondarySearchMode::AStar)
+	{
+		// A* ranks frontier nodes by f(n) = g(n) + h(n).
+		return CostSoFar + CalculateAStarHeuristic2D(Location, Goal);
+	}
+
+	return CostSoFar;
 }
 
 static bool HasHigherOpenPriority(const FSecondarySearchOpenItem& A, const FSecondarySearchOpenItem& B)

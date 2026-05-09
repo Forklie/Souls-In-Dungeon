@@ -40,6 +40,7 @@ void AMyAIController::Tick(float DeltaTime)
 	if (bIsAttacking)
 	{
 		StopMovement();
+		ResetAStarNavigation();
 
 		const FVector Direction = Player->GetActorLocation() - AI->GetActorLocation();
 		const FRotator LookRotation = Direction.Rotation();
@@ -62,11 +63,111 @@ void AMyAIController::Tick(float DeltaTime)
 	else
 	{
 		LastAttackStartTime = 0.0f;
-		MoveToLocation(Player->GetActorLocation());
+		UpdateAStarNavigation(AI, Player, CurrentTime);
 	}
 
 	UpdateSecondarySearchDebug(AI, Player, CurrentTime);
 	SetAttackAnimationState(AnimInstance, bIsAttacking);
+}
+
+void AMyAIController::UpdateAStarNavigation(APawn* AI, APawn* Player, float CurrentTime)
+{
+	if (!AI || !Player)
+	{
+		return;
+	}
+
+	FSecondarySearchSettings AStarSettings = BuildSecondarySearchSettings();
+	AStarSettings.CellSize = FMath::Max(AStarSettings.CellSize, 120.0f);
+	AStarSettings.PathPointReachRadius = FMath::Max(60.0f, AStarSettings.CellSize * 0.65f);
+	const float ProjectionRadius = FMath::Max(120.0f, AStarSettings.CellSize * 1.25f);
+	AStarSettings.ProjectionExtent = FVector(ProjectionRadius, ProjectionRadius, 300.0f);
+	const float DistanceToPlayer = FVector::Dist(AI->GetActorLocation(), Player->GetActorLocation());
+	AStarSettings.MaxSearchDistance = FMath::Max(AStarSettings.MaxSearchDistance, DistanceToPlayer * 3.0f + 2000.0f);
+	AStarSettings.MaxExpandedNodes = FMath::Max(
+		AStarSettings.MaxExpandedNodes,
+		FMath::Clamp(FMath::CeilToInt(FMath::Square(DistanceToPlayer / AStarSettings.CellSize) * 0.1f), 1500, 8000));
+
+	const FVector GoalLocation = Player->GetActorLocation();
+	const bool bShouldReplan = ShouldReplanAStarPath(AI->GetActorLocation(), GoalLocation, CurrentTime, AStarSettings);
+	if (bShouldReplan)
+	{
+		LastAStarReplanTime = CurrentTime;
+		BuildAStarPath(AI, GoalLocation, AStarSettings);
+	}
+
+	while (ActiveAStarPath.IsValidIndex(ActiveAStarWaypointIndex) &&
+		FVector::Dist2D(AI->GetActorLocation(), ActiveAStarPath[ActiveAStarWaypointIndex]) <= AStarSettings.PathPointReachRadius)
+	{
+		ActiveAStarWaypointIndex++;
+	}
+
+	if (ActiveAStarPath.IsValidIndex(ActiveAStarWaypointIndex))
+	{
+		MoveToLocation(ActiveAStarPath[ActiveAStarWaypointIndex], AStarSettings.PathPointReachRadius * 0.5f, false, true, false, true);
+		return;
+	}
+
+	MoveToLocation(Player->GetActorLocation(), StopDistance * 0.5f);
+}
+
+void AMyAIController::ResetAStarNavigation()
+{
+	ActiveAStarPath.Reset();
+	ActiveAStarWaypointIndex = 0;
+	LastAStarGoal = FVector::ZeroVector;
+	LastAStarReplanTime = -1000000.0f;
+}
+
+bool AMyAIController::ShouldReplanAStarPath(
+	const FVector& AILocation,
+	const FVector& GoalLocation,
+	float CurrentTime,
+	const FSecondarySearchSettings& Settings) const
+{
+	if (ActiveAStarPath.Num() == 0 || !ActiveAStarPath.IsValidIndex(ActiveAStarWaypointIndex))
+	{
+		return (CurrentTime - LastAStarReplanTime) >= AStarReplanInterval;
+	}
+
+	if ((CurrentTime - LastAStarReplanTime) < AStarReplanInterval)
+	{
+		return false;
+	}
+
+	const float GoalMoveThreshold = FMath::Max(Settings.CellSize * 2.0f, StopDistance * 0.5f);
+	if (FVector::DistSquared2D(GoalLocation, LastAStarGoal) > FMath::Square(GoalMoveThreshold))
+	{
+		return true;
+	}
+
+	const float OffPathThreshold = Settings.CellSize * 3.0f;
+	return FVector::DistSquared2D(AILocation, ActiveAStarPath[ActiveAStarWaypointIndex]) > FMath::Square(OffPathThreshold);
+}
+
+bool AMyAIController::BuildAStarPath(APawn* AI, const FVector& GoalLocation, const FSecondarySearchSettings& Settings)
+{
+	if (!AI)
+	{
+		return false;
+	}
+
+	const FSecondarySearchResult Result = FSecondarySearchSolver::FindPath(
+		GetWorld(),
+		AI->GetActorLocation(),
+		GoalLocation,
+		ESecondarySearchMode::AStar,
+		Settings);
+
+	if (!Result.bSuccess || Result.Path.Num() < 2)
+	{
+		return false;
+	}
+
+	ActiveAStarPath = Result.Path;
+	ActiveAStarWaypointIndex = 1;
+	LastAStarGoal = GoalLocation;
+	return true;
 }
 
 void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float CurrentTime)

@@ -20,6 +20,10 @@ protected:
 	virtual void Tick(float DeltaTime) override;
 
 private:
+	void UpdateAStarNavigation(APawn* AI, APawn* Player, float CurrentTime);
+	void ResetAStarNavigation();
+	bool ShouldReplanAStarPath(const FVector& AILocation, const FVector& GoalLocation, float CurrentTime, const FSecondarySearchSettings& Settings) const;
+	bool BuildAStarPath(APawn* AI, const FVector& GoalLocation, const FSecondarySearchSettings& Settings);
 	void UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float CurrentTime);
 	FSecondarySearchSettings BuildSecondarySearchSettings() const;
 	bool ShouldRefreshSearchDebug(const FVector& GoalLocation, float CurrentTime, ESecondarySearchMode SearchMode, const FSecondarySearchSettings& Settings) const;
@@ -36,6 +40,12 @@ private:
 	float LastDamageTime = 0.0f;
 	float AttackDelay = 0.5f;
 	float LastAttackStartTime = 0.0f;
+
+	TArray<FVector> ActiveAStarPath;
+	int32 ActiveAStarWaypointIndex = 0;
+	FVector LastAStarGoal = FVector::ZeroVector;
+	float LastAStarReplanTime = -1000000.0f;
+	float AStarReplanInterval = 0.35f;
 
 	FSecondarySearchSettings SecondarySearchSettings;
 	FSecondarySearchSettings ActiveSecondarySearchSettings;
