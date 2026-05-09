@@ -192,24 +192,9 @@ float ASoul_and_dungeonCharacter::TakeDamage(float DamageAmount, struct FDamageE
 		// 🎬 Trigger hit reaction overlay
 		StartBackHitReaction();
 
-		if (GEngine)
-		{
-			GEngine->AddOnScreenDebugMessage(
-				-1,
-				2.0f,
-				FColor::Red,
-				FString::Printf(TEXT("Player Hit! Health: %f"), Health)
-			);
-		}
-
 		// 💀 PLAYER DEAD
 		if (Health <= 0)
 		{
-			if (GEngine)
-			{
-				GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Red, TEXT("Player Dead"));
-			}
-
 			// 🔄 RESTART LEVEL
 			UGameplayStatics::OpenLevel(this, FName(*GetWorld()->GetName()));
 		}

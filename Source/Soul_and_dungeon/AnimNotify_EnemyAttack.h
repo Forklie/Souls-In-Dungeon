@@ -19,8 +19,8 @@ public:
 	float DamageAmount = 10.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Attack")
-	float TraceRadius = 50.0f;
+	float TraceRadius = 70.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Attack")
-	float TraceDistance = 100.0f;
+	float TraceDistance = 150.0f;
 };

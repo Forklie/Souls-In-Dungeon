@@ -4,6 +4,7 @@
 #include "Engine/World.h"
 #include "Soul_and_dungeonCharacter.h"
 #include "Kismet/GameplayStatics.h"
+#include "DrawDebugHelpers.h"
 
 void UAnimNotify_EnemyAttack::Notify(USkeletalMeshComponent* MeshComp, UAnimSequenceBase* Animation, const FAnimNotifyEventReference& EventReference)
 {
@@ -21,8 +22,8 @@ void UAnimNotify_EnemyAttack::Notify(USkeletalMeshComponent* MeshComp, UAnimSequ
 		return;
 	}
 
-	FVector TraceStart = OwnerActor->GetActorLocation();
-	FVector TraceEnd = TraceStart + (OwnerActor->GetActorForwardVector() * TraceDistance);
+	FVector TraceStart = OwnerActor->GetActorLocation() + (OwnerActor->GetActorForwardVector() * -30.0f); // Start slightly behind to catch point-blank
+	FVector TraceEnd = OwnerActor->GetActorLocation() + (OwnerActor->GetActorForwardVector() * (TraceDistance + 50.0f)); // Extend distance slightly
 
 	TArray<FHitResult> HitResults;
 	FCollisionShape Sphere = FCollisionShape::MakeSphere(TraceRadius);
@@ -40,9 +41,6 @@ void UAnimNotify_EnemyAttack::Notify(USkeletalMeshComponent* MeshComp, UAnimSequ
 		Sphere,
 		QueryParams
 	);
-
-
-
 
 	if (bHit)
 	{
