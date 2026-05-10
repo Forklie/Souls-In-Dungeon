@@ -107,11 +107,13 @@ void ASoul_and_dungeonCharacter::SetupPlayerInputComponent(UInputComponent* Play
 		// Looking
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &ASoul_and_dungeonCharacter::Look);
 
-		// Interaction
 		if (InteractAction)
 		{
 			EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Started, this, &ASoul_and_dungeonCharacter::DoInteract);
 		}
+
+		// 🧠 DEBUG TOGGLE: 'N' for Enemy Learning Mode
+		PlayerInputComponent->BindKey(EKeys::N, IE_Pressed, this, &ASoul_and_dungeonCharacter::ToggleEnemyLearningMode);
 	}
 	else
 	{
@@ -489,4 +491,26 @@ void ASoul_and_dungeonCharacter::OnHitReactionFinished()
 	// Begin blend-out: Tick will smoothly interpolate weight back to 0
 	HitReactionOverlayWeightTarget = 0.0f;
 	bHitReactionOverlay = false;
+}
+
+void ASoul_and_dungeonCharacter::ToggleEnemyLearningMode()
+{
+	IConsoleVariable* ModeCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("sd.EnemyNavigation.Mode"));
+	if (!ModeCVar)
+	{
+		return;
+	}
+
+	const int32 CurrentMode = ModeCVar->GetInt();
+	// Toggle: If currently in Learning (2), switch to SmoothedAStar (1). Otherwise, switch to Learning (2).
+	const int32 NewMode = (CurrentMode == 2) ? 1 : 2;
+	
+	ModeCVar->Set(NewMode, ECVF_SetByCode);
+
+	if (GEngine)
+	{
+		FString ModeName = (NewMode == 2) ? TEXT("LEARNING (Neural Network)") : TEXT("SMOOTHED ASTAR (Deterministic)");
+		FColor DisplayColor = (NewMode == 2) ? FColor::Cyan : FColor::Orange;
+		GEngine->AddOnScreenDebugMessage(-1, 4.0f, DisplayColor, FString::Printf(TEXT("Enemy Navigation Mode: %s"), *ModeName));
+	}
 }

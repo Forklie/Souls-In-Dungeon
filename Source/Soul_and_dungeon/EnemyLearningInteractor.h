@@ -29,8 +29,8 @@ public:
 		const int32 AgentId) override;
 
 private:
-	static constexpr int32 ObservationValueCount = 11;
-	static constexpr int32 ActionValueCount = 2;
+	static constexpr int32 ObservationValueCount = 21;
+	static constexpr int32 ActionValueCount = 4;
 	static const FName ObservationTag;
 	static const FName ActionTag;
 };

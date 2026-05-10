@@ -101,6 +101,12 @@ struct FSecondarySearchResult
 	int32 VisualizationRevision = 0;
 	int32 SearchGeneration = 0;
 	TArray<FSecondarySearchVisualEvent> VisualEvents;
+
+	// NN Metrics for HUD
+	bool bIsLearningMode = false;
+	float NNSteeringMag = 0.0f;
+	float NNAlignment = 0.0f;
+	int32 NNFallbackTotal = 0;
 };
 
 struct FSecondarySearchNodeRecord

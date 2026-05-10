@@ -27,7 +27,7 @@ class UEnemyLearningTrainingEnvironment : public ULearningAgentsTrainingEnvironm
 	GENERATED_BODY()
 
 public:
-	void Configure(APawn* InPlayerPawn, int32 InMaxEpisodeSteps, float InAttackRange);
+	void Configure(int32 InMaxEpisodeSteps, float InAttackRange);
 
 	virtual void GatherAgentReward_Implementation(float& OutReward, const int32 AgentId) override;
 	virtual void GatherAgentCompletion_Implementation(ELearningAgentsCompletion& OutCompletion, const int32 AgentId) override;
@@ -43,10 +43,8 @@ private:
 	AMyAIController* GetController(const int32 AgentId);
 	FEnemyLearningEpisodeState& GetOrCreateState(const int32 AgentId, AMyAIController* Controller);
 
-	UPROPERTY()
-	TObjectPtr<APawn> PlayerPawn;
+	// PlayerPawn removed to support multiple players via AMyAIController
 
-	UPROPERTY()
 	TMap<int32, FEnemyLearningEpisodeState> EpisodeStates;
 
 	int32 MaxEpisodeSteps = 1200;

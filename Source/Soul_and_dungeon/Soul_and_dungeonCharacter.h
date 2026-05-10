@@ -114,6 +114,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Interaction")
 	void DoInteract();
 
+	/** Toggles the enemy navigation mode between Learning (2) and Smoothed AStar (1) */
+	void ToggleEnemyLearningMode();
+
 	// 🖼️ INTERACTION UI  (pure C++ — no blueprint widget needed)
 	UPROPERTY(BlueprintReadOnly, Category = "Interaction")
 	UInteractPromptWidget* InteractPromptWidget;

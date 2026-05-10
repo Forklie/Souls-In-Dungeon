@@ -20,8 +20,10 @@
 #include "LearningAgentsNeuralNetwork.h"
 #include "LearningAgentsPolicy.h"
 #include "LearningAgentsPPOTrainer.h"
+#include "LMStudioPlayerDriver.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
+#include "Misc/Paths.h"
 #include "MyAIController.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
@@ -39,6 +41,35 @@ static int32 GetIntParamValue(const FString& Params, const TCHAR* Name, int32 De
 	int32 Value = DefaultValue;
 	FParse::Value(*Params, Name, Value);
 	return Value;
+}
+
+static float GetFloatParamValue(const FString& Params, const TCHAR* Name, float DefaultValue)
+{
+	float Value = DefaultValue;
+	FParse::Value(*Params, Name, Value);
+	return Value;
+}
+
+static bool GetBoolParamValue(const FString& Params, const TCHAR* Name, bool DefaultValue)
+{
+	FString ValueString;
+	if (FParse::Value(*Params, Name, ValueString))
+	{
+		bool ParsedValue = DefaultValue;
+		LexTryParseString(ParsedValue, *ValueString);
+		return ParsedValue;
+	}
+
+	FString SwitchName(Name);
+	SwitchName.RemoveFromEnd(TEXT("="));
+	bool Value = DefaultValue;
+	FParse::Bool(*Params, *SwitchName, Value);
+	return Value;
+}
+
+static FString ResolveProjectOutputPath(const FString& OutputPath)
+{
+	return FPaths::IsRelative(OutputPath) ? FPaths::ConvertRelativePathToFull(FPaths::ProjectDir(), OutputPath) : OutputPath;
 }
 
 static bool SaveNetworkAsset(ULearningAgentsNeuralNetwork* Network, const FString& AssetPath)
@@ -139,6 +170,13 @@ int32 UEnemyLearningTrainCommandlet::Main(const FString& Params)
 	const int32 Steps = FMath::Max(1, GetIntParamValue(Params, TEXT("Steps="), 500));
 	const int32 MaxEpisodeSteps = FMath::Max(1, GetIntParamValue(Params, TEXT("MaxEpisodeSteps="), 1200));
 	const int32 TrainingIterations = FMath::Max(1, GetIntParamValue(Params, TEXT("Iterations="), FMath::Max(1, Steps / 512)));
+	const bool bUseLMStudioPlayer = GetBoolParamValue(Params, TEXT("UseLMStudioPlayer="), false);
+	const FString LMStudioEndpoint = GetParamValue(Params, TEXT("LMStudioEndpoint="), TEXT("http://localhost:1234/v1/chat/completions"));
+	const FString LMStudioModel = GetParamValue(Params, TEXT("LMStudioModel="), TEXT(""));
+	const float LMStudioTimeout = FMath::Max(0.5f, GetFloatParamValue(Params, TEXT("LMStudioTimeout="), 10.0f));
+	const FString SummaryPath = ResolveProjectOutputPath(GetParamValue(Params, TEXT("SummaryPath="), FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("EnemyLearning"), TEXT("TrainingSummary.json"))));
+	const int32 ParallelCount = FMath::Max(1, GetIntParamValue(Params, TEXT("ParallelAgents="), 1));
+	const int32 Seed = GetIntParamValue(Params, TEXT("Seed="), 1234);
 	const float FixedDeltaSeconds = 1.0f / 60.0f;
 
 	RegisterLearningPythonPathsForCommandlet();
@@ -157,41 +195,51 @@ int32 UEnemyLearningTrainCommandlet::Main(const FString& Params)
 		return 1;
 	}
 
-	APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(World, 0);
-	AMyAIController* EnemyController = nullptr;
-	for (TActorIterator<AMyAIController> It(World); It; ++It)
+	TArray<AMyAIController*> ParallelControllers;
+	TArray<TUniquePtr<FLMStudioPlayerDriver>> ParallelDrivers;
+
+	FLMStudioPlayerDriverSettings PlayerDriverSettings;
+	PlayerDriverSettings.bUseLMStudio = bUseLMStudioPlayer;
+	PlayerDriverSettings.Endpoint = LMStudioEndpoint;
+	PlayerDriverSettings.Model = LMStudioModel;
+	PlayerDriverSettings.TimeoutSeconds = LMStudioTimeout;
+	PlayerDriverSettings.Seed = Seed;
+
+	for (int32 i = 0; i < ParallelCount; ++i)
 	{
-		if (It->GetPawn())
+		const FVector Offset(i * 2500.0f, 0.0f, 0.0f);
+		const FVector PlayerLoc = FVector(0.0f, 0.0f, 100.0f) + Offset;
+		const FVector EnemyLoc = FVector(700.0f, 0.0f, 100.0f) + Offset;
+
+		FActorSpawnParameters PlayerSpawnParams;
+		PlayerSpawnParams.Name = FName(*FString::Printf(TEXT("TrainingPlayer_%d"), i));
+		APawn* CurrentPlayerPawn = World->SpawnActor<APawn>(APawn::StaticClass(), PlayerLoc, FRotator::ZeroRotator, PlayerSpawnParams);
+
+		ACharacter* EnemyCharacter = World->SpawnActor<ACharacter>(ACharacter::StaticClass(), EnemyLoc, FRotator::ZeroRotator);
+		AMyAIController* CurrentEnemyController = World->SpawnActor<AMyAIController>(AMyAIController::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator);
+		
+		if (CurrentEnemyController && EnemyCharacter && CurrentPlayerPawn)
 		{
-			EnemyController = *It;
-			break;
+			CurrentEnemyController->Possess(EnemyCharacter);
+			CurrentEnemyController->SetLearningTrainingPlayer(CurrentPlayerPawn);
+			ParallelControllers.Add(CurrentEnemyController);
+
+			TUniquePtr<FLMStudioPlayerDriver> Driver = MakeUnique<FLMStudioPlayerDriver>();
+			Driver->Configure(PlayerDriverSettings);
+			Driver->Reset(
+				CurrentPlayerPawn,
+				CurrentEnemyController,
+				bUseLMStudioPlayer ? ELMStudioPlayerBehavior::LMStudioEvasive : ELMStudioPlayerBehavior::DeterministicEvasive,
+				CurrentPlayerPawn->GetActorLocation());
+			ParallelDrivers.Add(MoveTemp(Driver));
 		}
 	}
 
-	if (!PlayerPawn)
+	if (ParallelControllers.Num() == 0)
 	{
-		FActorSpawnParameters SpawnParams;
-		SpawnParams.Name = TEXT("EnemyLearningTrainingPlayer");
-		PlayerPawn = World->SpawnActor<APawn>(APawn::StaticClass(), FVector(0.0f, 0.0f, 100.0f), FRotator::ZeroRotator, SpawnParams);
-	}
-
-	if (!EnemyController)
-	{
-		ACharacter* EnemyCharacter = World->SpawnActor<ACharacter>(ACharacter::StaticClass(), FVector(700.0f, 0.0f, 100.0f), FRotator::ZeroRotator);
-		EnemyController = World->SpawnActor<AMyAIController>(AMyAIController::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator);
-		if (EnemyController && EnemyCharacter)
-		{
-			EnemyController->Possess(EnemyCharacter);
-		}
-	}
-
-	if (!PlayerPawn || !EnemyController)
-	{
-		UE_LOG(LogTemp, Error, TEXT("EnemyLearningTrain: missing player pawn or AMyAIController enemy in %s"), *MapPath);
+		UE_LOG(LogTemp, Error, TEXT("EnemyLearningTrain: failed to spawn any parallel training instances"));
 		return 1;
 	}
-
-	EnemyController->SetLearningTrainingPlayer(PlayerPawn);
 
 	if (IConsoleVariable* ModeCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("sd.EnemyNavigation.Mode")))
 	{
@@ -200,16 +248,20 @@ int32 UEnemyLearningTrainCommandlet::Main(const FString& Params)
 
 	AActor* ManagerOwner = World->SpawnActor<AActor>();
 	ULearningAgentsManager* Manager = NewObject<ULearningAgentsManager>(ManagerOwner, TEXT("EnemyLearningAgentsManager"));
-	Manager->SetMaxAgentNum(1);
+	Manager->SetMaxAgentNum(ParallelCount);
 	Manager->RegisterComponent();
 
 	ULearningAgentsManager* ManagerRef = Manager;
 	ULearningAgentsInteractor* Interactor = ULearningAgentsInteractor::MakeInteractor(ManagerRef, UEnemyLearningInteractor::StaticClass(), TEXT("EnemyLearningInteractor"));
 	ULearningAgentsTrainingEnvironment* TrainingEnvironmentBase = ULearningAgentsTrainingEnvironment::MakeTrainingEnvironment(ManagerRef, UEnemyLearningTrainingEnvironment::StaticClass(), TEXT("EnemyLearningTrainingEnvironment"));
 	UEnemyLearningTrainingEnvironment* TrainingEnvironment = CastChecked<UEnemyLearningTrainingEnvironment>(TrainingEnvironmentBase);
-	TrainingEnvironment->Configure(PlayerPawn, MaxEpisodeSteps, 150.0f);
+	TrainingEnvironment->Configure(MaxEpisodeSteps, 150.0f);
 
-	Manager->AddAgent(EnemyController);
+	for (int32 i = 0; i < ParallelControllers.Num(); ++i)
+	{
+		const int32 AgentId = Manager->AddAgent(ParallelControllers[i]);
+		UE_LOG(LogTemp, Display, TEXT("EnemyLearningTrain: Registered Parallel Agent %d with ID %d"), i, AgentId);
+	}
 
 	ULearningAgentsPolicy* Policy = ULearningAgentsPolicy::MakePolicy(ManagerRef, Interactor, ULearningAgentsPolicy::StaticClass(), TEXT("EnemySteeringPolicy"));
 	ULearningAgentsPolicy* PolicyRef = Policy;
@@ -248,9 +300,14 @@ int32 UEnemyLearningTrainCommandlet::Main(const FString& Params)
 	GameSettings.bUseFixedTimeStep = true;
 	GameSettings.FixedTimeStepFrequency = 60.0f;
 
-	UE_LOG(LogTemp, Display, TEXT("EnemyLearningTrain: running %d steps (%d PPO iterations)"), Steps, TrainingIterations);
+	UE_LOG(LogTemp, Display, TEXT("EnemyLearningTrain: running %d steps (%d PPO iterations) with %d parallel agents"), Steps, TrainingIterations, ParallelCount);
 	for (int32 StepIndex = 0; StepIndex < Steps; ++StepIndex)
 	{
+		for (TUniquePtr<FLMStudioPlayerDriver>& Driver : ParallelDrivers)
+		{
+			Driver->Tick(World, FixedDeltaSeconds, World->GetTimeSeconds());
+		}
+		
 		Trainer->RunTraining(TrainingSettings, GameSettings, StepIndex == 0, true);
 		TickWorld(World, FixedDeltaSeconds);
 
@@ -265,23 +322,40 @@ int32 UEnemyLearningTrainCommandlet::Main(const FString& Params)
 	Trainer->EndTraining();
 
 	const bool bSavedPolicy = SaveNetworkAsset(Policy->GetPolicyNetworkAsset(), OutputPolicyPath);
-	const FString SummaryPath = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("EnemyLearning"), TEXT("TrainingSummary.json"));
 	IFileManager::Get().MakeDirectory(*FPaths::GetPath(SummaryPath), true);
+
+	FLMStudioPlayerDriverMetrics TotalMetrics;
+	for (const TUniquePtr<FLMStudioPlayerDriver>& Driver : ParallelDrivers)
+	{
+		const FLMStudioPlayerDriverMetrics& m = Driver->GetMetrics();
+		TotalMetrics.DecisionRequests += m.DecisionRequests;
+		TotalMetrics.DecisionResponses += m.DecisionResponses;
+		TotalMetrics.DecisionTimeouts += m.DecisionTimeouts;
+		TotalMetrics.FallbackDecisions += m.FallbackDecisions;
+		TotalMetrics.InvalidResponses += m.InvalidResponses;
+	}
 
 	const float AverageReward = TrainingEnvironment->GetRewardSampleCount() > 0
 		? TrainingEnvironment->GetRewardSum() / static_cast<float>(TrainingEnvironment->GetRewardSampleCount())
 		: 0.0f;
 
 	const FString Summary = FString::Printf(
-		TEXT("{\n  \"steps\": %d,\n  \"ppo_iterations\": %d,\n  \"average_reward\": %.6f,\n  \"completed_episodes\": %d,\n  \"truncated_episodes\": %d,\n  \"stuck_episodes\": %d,\n  \"policy_path\": \"%s\",\n  \"policy_saved\": %s\n}\n"),
+		TEXT("{\n  \"steps\": %d,\n  \"ppo_iterations\": %d,\n  \"parallel_agents\": %d,\n  \"average_reward\": %.6f,\n  \"completed_episodes\": %d,\n  \"truncated_episodes\": %d,\n  \"stuck_episodes\": %d,\n  \"policy_path\": \"%s\",\n  \"policy_saved\": %s,\n  \"lmstudio_enabled\": %s,\n  \"lm_decision_requests\": %d,\n  \"lm_decision_responses\": %d,\n  \"lm_decision_timeouts\": %d,\n  \"lm_fallback_decisions\": %d,\n  \"lm_invalid_responses\": %d\n}\n"),
 		Steps,
 		TrainingIterations,
+		ParallelCount,
 		AverageReward,
 		TrainingEnvironment->GetCompletedEpisodeCount(),
 		TrainingEnvironment->GetTruncatedEpisodeCount(),
 		TrainingEnvironment->GetStuckEpisodeCount(),
 		*OutputPolicyPath,
-		bSavedPolicy ? TEXT("true") : TEXT("false"));
+		bSavedPolicy ? TEXT("true") : TEXT("false"),
+		bUseLMStudioPlayer ? TEXT("true") : TEXT("false"),
+		TotalMetrics.DecisionRequests,
+		TotalMetrics.DecisionResponses,
+		TotalMetrics.DecisionTimeouts,
+		TotalMetrics.FallbackDecisions,
+		TotalMetrics.InvalidResponses);
 	FFileHelper::SaveStringToFile(Summary, *SummaryPath);
 
 	UE_LOG(LogTemp, Display, TEXT("EnemyLearningTrain: wrote summary %s"), *SummaryPath);

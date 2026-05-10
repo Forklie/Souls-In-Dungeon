@@ -10,6 +10,8 @@
 #include "SecondarySearchVisualizerActor.h"
 #include "Soul_and_dungeon.h"
 #include "Soul_and_dungeonCharacter.h"
+#include "LearningAgentsManager.h"
+#include "EnemyLearningInteractor.h"
 
 namespace
 {
@@ -36,6 +38,31 @@ AMyAIController::AMyAIController()
 	PrimaryActorTick.bCanEverTick = true;
 }
 
+void AMyAIController::BeginPlay()
+{
+	Super::BeginPlay();
+
+	// Ensure a Learning Agents Manager exists in the world
+	UWorld* World = GetWorld();
+	bool bManagerExists = false;
+	if (World)
+	{
+		for (TActorIterator<AActor> It(World); It; ++It)
+		{
+			if (It->FindComponentByClass<ULearningAgentsManager>())
+			{
+				bManagerExists = true;
+				break;
+			}
+		}
+	}
+
+	if (World && !bManagerExists)
+	{
+		UE_LOG(LogSoul_and_dungeon, Warning, TEXT("AI Controller: No LearningAgentsManager found in world. Please ensure BP_EnemyLearningManager is placed in the level for Neural Navigation."));
+	}
+}
+
 void AMyAIController::GetEnemyLearningObservation(FEnemyLearningObservation& OutObservation) const
 {
 	OutObservation = LastLearningObservation;
@@ -47,11 +74,7 @@ FVector2D AMyAIController::GetExpertLearningSteeringDirection() const
 	return FVector2D(PathDirection.X, PathDirection.Y).GetClampedToMaxSize(1.0f);
 }
 
-void AMyAIController::ApplyLearningSteeringInput(const FVector2D& MoveInput)
-{
-	LastLearningSteeringInput = MoveInput.GetClampedToMaxSize(1.0f);
-	LastLearningSteeringTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
-}
+
 
 int32 AMyAIController::GetAStarFallbackCount() const
 {
@@ -61,6 +84,11 @@ int32 AMyAIController::GetAStarFallbackCount() const
 void AMyAIController::SetLearningTrainingPlayer(APawn* Player)
 {
 	LearningTrainingPlayer = Player;
+}
+
+APawn* AMyAIController::GetLearningTrainingPlayer() const
+{
+	return LearningTrainingPlayer.Get();
 }
 
 void AMyAIController::Tick(float DeltaTime)
@@ -81,11 +109,38 @@ void AMyAIController::Tick(float DeltaTime)
 		return;
 	}
 
+
 	UAnimInstance* AnimInstance = AICharacter->GetMesh()->GetAnimInstance();
-	const bool bIsAttacking = Distance <= StopDistance;
 	const float CurrentTime = GetWorld()->GetTimeSeconds();
 
-	if (bIsAttacking)
+	// Calculate attack state with hysteresis to prevent animation resetting when the player moves slightly
+	const float AttackDistance = bIsCurrentlyAttacking ? (StopDistance + AttackHysteresis) : StopDistance;
+	bool bAttackRequested = Distance <= AttackDistance;
+	
+	// Ensure we don't exit an attack too quickly
+	if (bIsCurrentlyAttacking && (CurrentTime - LastAttackStartTime) < MinAttackDuration)
+	{
+		bAttackRequested = true;
+	}
+
+	// Check if we are currently reacting to a hit (non-montage overlay)
+	bool bIsReacting = false;
+	if (ASoul_and_dungeonCharacter* SoulChar = Cast<ASoul_and_dungeonCharacter>(AI))
+	{
+		bIsReacting = SoulChar->bHitReactionOverlay;
+	}
+
+	if (bAttackRequested && !bIsCurrentlyAttacking)
+	{
+		bIsCurrentlyAttacking = true;
+		LastAttackStartTime = CurrentTime;
+	}
+	else if (!bAttackRequested && bIsCurrentlyAttacking)
+	{
+		bIsCurrentlyAttacking = false;
+	}
+
+	if (bIsCurrentlyAttacking || bIsReacting)
 	{
 		StopMovement();
 		ResetAStarNavigation();
@@ -94,18 +149,17 @@ void AMyAIController::Tick(float DeltaTime)
 		const FVector Direction = Player->GetActorLocation() - AI->GetActorLocation();
 		const FRotator LookRotation = Direction.Rotation();
 		AI->SetActorRotation(FRotator(0.0f, LookRotation.Yaw, 0.0f));
-
-		// Attack damage is now handled by UAnimNotify_EnemyAttack in the attack animation
 	}
 	else
 	{
-
 		UpdateAStarNavigation(AI, Player, CurrentTime, DeltaTime);
 	}
 
 	UpdateSecondarySearchDebug(AI, Player, CurrentTime);
-	SetAttackAnimationState(AnimInstance, bIsAttacking);
+	SetAttackAnimationState(AnimInstance, bIsCurrentlyAttacking);
+
 }
+
 
 void AMyAIController::UpdateAStarNavigation(APawn* AI, APawn* Player, float CurrentTime, float DeltaTime)
 {
@@ -146,18 +200,48 @@ void AMyAIController::UpdateAStarNavigation(APawn* AI, APawn* Player, float Curr
 
 	if (!PathTarget.IsNearlyZero())
 	{
-		if (NavigationMode == EEnemyNavigationMode::LearningWithAStarFallback &&
-			(CurrentTime - LastLearningSteeringTime) <= LearningSteeringMaxAge &&
-			LastLearningSteeringInput.SizeSquared() > KINDA_SMALL_NUMBER)
+		if (NavigationMode == EEnemyNavigationMode::LearningWithAStarFallback)
 		{
-			const FVector SteeringTarget = AI->GetActorLocation() + FVector(LastLearningSteeringInput.X, LastLearningSteeringInput.Y, 0.0f) * LearningSteeringProjectionDistance;
-			MoveToLocation(SteeringTarget, AStarSettings.PathPointReachRadius * 0.35f, false, true, false, true);
-			UpdateNavigationMetrics(AI, Player, SteeringTarget, DeltaTime, false);
-			return;
+			const bool bSteeringActive = (CurrentTime - LastLearningSteeringTime) <= LearningSteeringMaxAge && LastLearningSteeringInput.SizeSquared() > KINDA_SMALL_NUMBER;
+			if (bSteeringActive)
+			{
+				// If we are currently playing an attack or hit montage, don't update movement.
+				// This allows actions to complete fully before we resume steering toward the player.
+				if (ACharacter* MyChar = Cast<ACharacter>(AI))
+				{
+					if (UAnimInstance* AnimInst = MyChar->GetMesh()->GetAnimInstance())
+					{
+						if (AnimInst->IsAnyMontagePlaying())
+						{
+							// Still observe navigation so metrics stay fresh, but don't issue movement commands.
+							UpdateNavigationMetrics(AI, Player, PathTarget, DeltaTime, false);
+							return;
+						}
+					}
+				}
+
+
+				// Use a fixed steering distance to prevent the AI from slowing down (braking) when the NN outputs a low speed scale.
+				// This ensures the AI always pursues at its MaxWalkSpeed regardless of the player's current speed.
+				const float SteeringDistance = LearningSteeringProjectionDistance;
+				const FVector SteeringTarget = AI->GetActorLocation() + FVector(LastLearningSteeringInput.X, LastLearningSteeringInput.Y, 0.0f).GetSafeNormal() * SteeringDistance;
+				
+				MoveToLocation(SteeringTarget, AStarSettings.PathPointReachRadius * 0.35f, false, true, false, true);
+				
+				// CRITICAL: Always observe the actual A* PathTarget as the goal, NOT the steering target.
+				// This prevents a feedback loop where the AI observes its own steering instead of the objective.
+				UpdateNavigationMetrics(AI, Player, PathTarget, DeltaTime, false);
+				return;
+			}
+			else
+			{
+				// NN is silent - count this as a fallback for debug tracking
+				AStarFallbackCount++;
+			}
 		}
 
 		MoveToLocation(PathTarget, AStarSettings.PathPointReachRadius * 0.45f, false, true, false, true);
-		UpdateNavigationMetrics(AI, Player, PathTarget, DeltaTime, false);
+		UpdateNavigationMetrics(AI, Player, PathTarget, DeltaTime, NavigationMode == EEnemyNavigationMode::LearningWithAStarFallback);
 		return;
 	}
 
@@ -165,6 +249,19 @@ void AMyAIController::UpdateAStarNavigation(APawn* AI, APawn* Player, float Curr
 	AStarFallbackCount++;
 	MoveToLocation(Player->GetActorLocation(), StopDistance * 0.5f);
 	UpdateNavigationMetrics(AI, Player, Player->GetActorLocation(), DeltaTime, bUsedFallback);
+}
+
+void AMyAIController::UpdateLearningPathHistory(const FVector& AILocation)
+{
+	const float MinDistance = 50.0f;
+	if (LearningPathHistory.Num() == 0 || FVector::DistSquared(AILocation, LearningPathHistory.Last()) > FMath::Square(MinDistance))
+	{
+		LearningPathHistory.Add(AILocation);
+		if (LearningPathHistory.Num() > 100) // Max 100 points
+		{
+			LearningPathHistory.RemoveAt(0);
+		}
+	}
 }
 
 void AMyAIController::ResetAStarNavigation()
@@ -347,6 +444,24 @@ FVector AMyAIController::CalculatePathFollowTarget(const FVector& AILocation, TA
 	return Path[LookAheadIndex];
 }
 
+void AMyAIController::ApplyLearningSteeringInput(const FVector2D& MoveInput, float SpeedScale, bool bShouldRepath)
+{
+	LastLearningSteeringInput = MoveInput.GetClampedToMaxSize(1.0f);
+	LastLearningSpeedScale = FMath::Clamp(SpeedScale, 0.0f, 1.0f);
+	LastLearningSteeringTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+	
+	if (bShouldRepath && (LastLearningSteeringTime - LastAStarReplanTime) > AStarReplanInterval)
+	{
+		UE_LOG(LogSoul_and_dungeon, Verbose, TEXT("AI [%s] Neural Network requested repath."), *GetName());
+		LastAStarReplanTime = -1000.0f; // Force replan next tick
+	}
+
+	if (MoveInput.SizeSquared() > 0.001f)
+	{
+		UE_LOG(LogTemp, VeryVerbose, TEXT("AI [%s] Steering: %s, Speed: %.2f"), *GetName(), *LastLearningSteeringInput.ToString(), LastLearningSpeedScale);
+	}
+}
+
 void AMyAIController::UpdateNavigationMetrics(APawn* AI, APawn* Player, const FVector& PathTarget, float DeltaTime, bool bUsedFallback)
 {
 	if (!AI || !Player)
@@ -354,6 +469,7 @@ void AMyAIController::UpdateNavigationMetrics(APawn* AI, APawn* Player, const FV
 		return;
 	}
 
+	UWorld* World = GetWorld();
 	const FVector AILocation = AI->GetActorLocation();
 	const float MovedDistance = LastNavigationLocation.IsNearlyZero() ? BIG_NUMBER : FVector::Dist2D(AILocation, LastNavigationLocation);
 	StuckSeconds = MovedDistance < 4.0f ? StuckSeconds + FMath::Max(DeltaTime, 0.0f) : 0.0f;
@@ -370,12 +486,79 @@ void AMyAIController::UpdateNavigationMetrics(APawn* AI, APawn* Player, const FV
 	const int32 PathIndex = ActiveSmoothedPath.Num() > 0 ? ActiveSmoothedWaypointIndex : ActiveAStarWaypointIndex;
 	Observation.PathProgress = PathCount > 1 ? static_cast<float>(PathIndex) / static_cast<float>(PathCount - 1) : LastPathProgress;
 	Observation.bHasLineOfSight = HasClearNavigationSegment(AILocation, Player->GetActorLocation());
+
+	// --- Richer Observations Upgrade ---
+	
+	// 1. Relative Angle to Player
+	const FVector Forward = AI->GetActorForwardVector();
+	const FVector ToPlayer = Observation.DirectionToPlayer;
+	if (ToPlayer.IsNearlyZero())
+	{
+		Observation.RelativeAngleToPlayer = 0.0f;
+	}
+	else
+	{
+		Observation.RelativeAngleToPlayer = FMath::Atan2(ToPlayer.Y, ToPlayer.X) - FMath::Atan2(Forward.Y, Forward.X);
+		while (Observation.RelativeAngleToPlayer > PI) Observation.RelativeAngleToPlayer -= 2.0f * PI;
+		while (Observation.RelativeAngleToPlayer < -PI) Observation.RelativeAngleToPlayer += 2.0f * PI;
+	}
+
+	// 2. Obstacle Probes (8 directions)
+	const int32 NumProbes = 8;
+	const float ProbeDistance = 400.0f;
+	Observation.ObstacleProbes.SetNumUninitialized(NumProbes);
+	
+	FCollisionQueryParams QueryParams;
+	QueryParams.AddIgnoredActor(AI);
+	QueryParams.AddIgnoredActor(Player);
+
+	for (int32 i = 0; i < NumProbes; ++i)
+	{
+		const float Angle = (static_cast<float>(i) / NumProbes) * 2.0f * PI;
+		const FVector Direction = FVector(FMath::Cos(Angle), FMath::Sin(Angle), 0.0f);
+		const FVector End = AILocation + Direction * ProbeDistance;
+		
+		FHitResult Hit;
+		if (World && World->LineTraceSingleByChannel(Hit, AILocation, End, ECC_WorldStatic, QueryParams))
+		{
+			Observation.ObstacleProbes[i] = Hit.Distance / ProbeDistance;
+		}
+		else
+		{
+			Observation.ObstacleProbes[i] = 1.0f;
+		}
+	}
+
+	// 3. Path Blockage Detection
+	if (!PathTarget.IsNearlyZero())
+	{
+		FHitResult PathHit;
+		Observation.bIsPathBlocked = World && World->LineTraceSingleByChannel(PathHit, AILocation + FVector(0, 0, 50), PathTarget + FVector(0, 0, 50), ECC_WorldStatic, QueryParams);
+	}
+	else
+	{
+		Observation.bIsPathBlocked = false;
+	}
+
 	LastPathProgress = Observation.PathProgress;
 	LastLearningObservation = Observation;
 
 	if (bUsedFallback)
 	{
 		LastLearningObservation.PathProgress = 0.0f;
+	}
+
+	const EEnemyNavigationMode NavigationMode = GetNavigationMode();
+	const float CurrentTime = World ? World->GetTimeSeconds() : 0.0f;
+	const bool bLearningActive = (CurrentTime - LastLearningSteeringTime) <= LearningSteeringMaxAge && LastLearningSteeringInput.SizeSquared() > KINDA_SMALL_NUMBER;
+	
+	if (NavigationMode == EEnemyNavigationMode::LearningWithAStarFallback && bLearningActive)
+	{
+		UpdateLearningPathHistory(AILocation);
+	}
+	else if (LearningPathHistory.Num() > 0)
+	{
+		LearningPathHistory.Empty();
 	}
 }
 
@@ -542,21 +725,78 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 	LastSearchResult.UCSCost = CalcCost(UCSResult.Path);
 	LastSearchResult.AStarCost = CalcCost(AStarResult.Path);
 
-	// Use AStar as the preview path if the main mode is something else
-	if (SearchMode != ESecondarySearchMode::AStar && AStarResult.bSuccess)
+	const EEnemyNavigationMode NavMode = GetNavigationMode();
+	const bool bLearningActive = (CurrentTime - LastLearningSteeringTime) <= LearningSteeringMaxAge && LastLearningSteeringInput.SizeSquared() > KINDA_SMALL_NUMBER;
+	
+	if (NavMode == EEnemyNavigationMode::LearningWithAStarFallback)
 	{
-		LastSearchResult.PreviewPath = AStarResult.Path;
+		// In Learning Mode: prioritize showing A* vs NN history
+		LastSearchResult.PreviewPath = LearningPathHistory;
+		
+		// Fill NN metrics for the HUD
+		LastSearchResult.bIsLearningMode = true; // Always true in this block
+		LastSearchResult.NNSteeringMag = LastLearningSteeringInput.Size();
+		LastSearchResult.NNFallbackTotal = AStarFallbackCount;
+		LastSearchResult.bSuccess = AStarResult.bSuccess;
+		LastSearchResult.FailureReason = AStarResult.FailureReason;
+		
+		// Calculate alignment (dot product of NN steering vs A* direction)
+		const bool bSteeringActive = (CurrentTime - LastLearningSteeringTime) <= LearningSteeringMaxAge && LastLearningSteeringInput.SizeSquared() > KINDA_SMALL_NUMBER;
+		if (bSteeringActive && AStarResult.Path.Num() > 1)
+		{
+			FVector AStarDir = (AStarResult.Path[1] - AI->GetActorLocation()).GetSafeNormal2D();
+			FVector NNTargetDir = FVector(LastLearningSteeringInput.X, LastLearningSteeringInput.Y, 0.0f).GetSafeNormal();
+			LastSearchResult.NNAlignment = FVector::DotProduct(AStarDir, NNTargetDir);
+		}
+
+		// Hide the others to keep visualizer clean as requested
+		LastSearchResult.BFSPath.Reset();
+		LastSearchResult.UCSPath.Reset();
+		
+		// If we have an active steering target, add it as a "Final Path" segment from the enemy
+		if (bSteeringActive)
+		{
+		const float SteeringDistance = LearningSteeringProjectionDistance;
+		const FVector SteeringTarget = AI->GetActorLocation() + FVector(LastLearningSteeringInput.X, LastLearningSteeringInput.Y, 0.0f) * SteeringDistance;
+			LastSearchResult.Path.Reset();
+			LastSearchResult.Path.Add(AI->GetActorLocation());
+			LastSearchResult.Path.Add(SteeringTarget);
+
+			// Mark as successful for visualization purposes so we don't show <SEARCH ERR>
+			// while the AI is successfully navigating via neural network.
+			LastSearchResult.bSuccess = true;
+		}
+	}
+	else
+	{
+		// Use AStar as the preview path if the main mode is something else
+		if (SearchMode != ESecondarySearchMode::AStar && AStarResult.bSuccess)
+		{
+			LastSearchResult.PreviewPath = AStarResult.Path;
+		}
 	}
 
 	LastSearchResult.SampledNodes = DebugBaseGridNodes;
 	LastSearchResult.CurrentTarget = SearchGoalLocation;
 	LastSearchResult.Mode = SearchMode;
 
-	bool bAnyFinished = BFSTask.HasResult() || UCSTask.HasResult() || AStarTask.HasResult();
-	if (bAnyFinished)
+	// Determine if the selected debug search task is finished
+	bool bSelectedTaskFinished = false;
+	switch (SearchMode)
+	{
+		case ESecondarySearchMode::BFS: bSelectedTaskFinished = BFSTask.HasResult(); break;
+		case ESecondarySearchMode::UCS: bSelectedTaskFinished = UCSTask.HasResult(); break;
+		case ESecondarySearchMode::AStar: bSelectedTaskFinished = AStarTask.HasResult(); break;
+	}
+
+	if (bSelectedTaskFinished)
 	{
 		bHasSearchResult = true;
-		if (LastSearchResult.bSuccess)
+
+		// Suppress failure logs if neural navigation is successfully providing steering
+		const bool bNeuralSteeringActive = (NavMode == EEnemyNavigationMode::LearningWithAStarFallback) && bLearningActive;
+
+		if (LastSearchResult.bSuccess || bNeuralSteeringActive)
 		{
 			LastSearchFailureReason.Empty();
 		}

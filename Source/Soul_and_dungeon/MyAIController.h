@@ -44,6 +44,15 @@ struct FEnemyLearningObservation
 
 	UPROPERTY(BlueprintReadOnly, Category = "Learning")
 	bool bHasLineOfSight = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Learning")
+	TArray<float> ObstacleProbes;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Learning")
+	float RelativeAngleToPlayer = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Learning")
+	bool bIsPathBlocked = false;
 };
 
 UCLASS()
@@ -56,11 +65,16 @@ public:
 
 	void GetEnemyLearningObservation(FEnemyLearningObservation& OutObservation) const;
 	FVector2D GetExpertLearningSteeringDirection() const;
-	void ApplyLearningSteeringInput(const FVector2D& MoveInput);
+	void ApplyLearningSteeringInput(const FVector2D& MoveInput, float SpeedScale, bool bShouldRepath);
+
+	void UpdateLearningPathHistory(const FVector& AILocation);
+
 	int32 GetAStarFallbackCount() const;
 	void SetLearningTrainingPlayer(APawn* Player);
+	APawn* GetLearningTrainingPlayer() const;
 
 protected:
+	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaTime) override;
 
 private:
@@ -96,7 +110,11 @@ private:
 	float AStarReplanInterval = 0.35f;
 	float SmoothedPathLookAheadDistance = 260.0f;
 	float LearningSteeringProjectionDistance = 260.0f;
+	
+	TArray<FVector> LearningPathHistory;
+
 	FVector2D LastLearningSteeringInput = FVector2D::ZeroVector;
+	float LastLearningSpeedScale = 1.0f;
 	float LastLearningSteeringTime = -1000000.0f;
 	float LearningSteeringMaxAge = 0.25f;
 	FEnemyLearningObservation LastLearningObservation;
@@ -138,4 +156,11 @@ private:
 	bool bDebugSearchWasEnabled = false;
 	FVector LastNavCheckAIPos = FVector::ZeroVector;
 	FVector LastNavCheckPlayerPos = FVector::ZeroVector;
+	
+	// Attack State Management
+	bool bIsCurrentlyAttacking = false;
+	float LastAttackStartTime = 0.0f;
+	float MinAttackDuration = 0.8f; // Ensure at least one full swing can play
+	float AttackHysteresis = 80.0f; // Distance buffer to prevent rapid switching
 };
+

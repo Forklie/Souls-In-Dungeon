@@ -16,6 +16,11 @@
 - `Source/Soul_and_dungeonEditor/EnemyLearningTrainingEnvironment.cpp`
 - `Source/Soul_and_dungeonEditor/EnemyLearningTrainCommandlet.h`
 - `Source/Soul_and_dungeonEditor/EnemyLearningTrainCommandlet.cpp`
+- `Source/Soul_and_dungeonEditor/EnemyLearningEvaluateCommandlet.h`
+- `Source/Soul_and_dungeonEditor/EnemyLearningEvaluateCommandlet.cpp`
+- `Source/Soul_and_dungeonEditor/LMStudioPlayerDriver.h`
+- `Source/Soul_and_dungeonEditor/LMStudioPlayerDriver.cpp`
+- `Scripts/run-continuous-enemy-learning.sh`
 - `Docs/AStarNavigationHandoff.md`
 - `Docs/ReinforcementLearningEnemyNavigation.md`
 
@@ -123,6 +128,50 @@ Run a longer local training pass:
 
 The saved policy asset is the trained neural network. The current runtime still treats Learning mode as optional and falls back to smoothed A* if no policy-driven action is active.
 
+## Continuous improvement with regression gates
+
+`EnemyLearningEvaluate` runs fixed benchmark episodes and writes metrics JSON. It can evaluate a trained policy, the current stable policy, or the smoothed A* fallback when no policy path is provided.
+
+`Scripts/run-continuous-enemy-learning.sh` automates the guarded loop:
+
+1. Train a timestamped candidate policy under `/Game/AI/Learning/Candidates`.
+2. Evaluate the candidate.
+3. Evaluate the current stable policy at `/Game/AI/Learning/NN_EnemySteering`, or smoothed A* if no stable policy exists.
+4. Run a fallback safety evaluation with LM Studio disabled.
+5. Promote the candidate to `Content/AI/Learning/NN_EnemySteering.uasset` only if regression gates pass.
+
+Run one safe cycle:
+
+```sh
+Scripts/run-continuous-enemy-learning.sh --cycles 1 --train-steps 100 --iterations 1
+```
+
+For LM Studio testing, use a loaded chat model id from `curl http://localhost:1234/v1/models` and give slower local models enough time:
+
+```sh
+Scripts/run-continuous-enemy-learning.sh --cycles 1 --train-steps 100 --iterations 1 --model "google/gemma-4-e2b" --lm-timeout 20
+```
+
+Useful outputs:
+
+```text
+Saved/EnemyLearning/Runs/<run_id>/training_summary.json
+Saved/EnemyLearning/Runs/<run_id>/candidate_eval.json
+Saved/EnemyLearning/Runs/<run_id>/baseline_eval.json
+Saved/EnemyLearning/Runs/<run_id>/fallback_eval.json
+Saved/EnemyLearning/Runs/<run_id>/promotion_decision.json
+```
+
+Promotion gates:
+
+- Candidate success rate must be at least baseline success rate.
+- Candidate average chase time must not be more than 5% worse.
+- Candidate stuck episodes must not increase.
+- Candidate A* fallback count must stay within the allowed tolerance.
+- Fallback evaluation must still run without LM Studio.
+
+The LM Studio player is a strategic opponent. It asks the local server for a goal choice about once per second, validates that choice against navmesh candidate goals, and moves deterministically between decisions. If LM Studio is offline, too slow for `--lm-timeout`, or returns invalid JSON, the player falls back to deterministic evasive movement and training continues.
+
 ## Test steps
 
 1. Build:
@@ -144,11 +193,17 @@ The saved policy asset is the trained neural network. The current runtime still 
 
 4. Run the commandlet smoke test above. A passing run should finish with `Success - 0 error(s)` and `policy save succeeded`.
 
-5. Toggle search debug:
+5. Run one continuous learning smoke cycle:
+
+   ```sh
+   Scripts/run-continuous-enemy-learning.sh --cycles 1 --train-steps 100 --iterations 1
+   ```
+
+6. Toggle search debug:
 
    ```text
    sd.SearchDebug.Toggle
    sd.SearchDebug.Mode AStar
    ```
 
-6. Compare against UCS in the debug HUD. A* should keep a similar path cost while expanding fewer nodes in typical cases.
+7. Compare against UCS in the debug HUD. A* should keep a similar path cost while expanding fewer nodes in typical cases.

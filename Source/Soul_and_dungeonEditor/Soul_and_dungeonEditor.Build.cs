@@ -19,7 +19,9 @@ public class Soul_and_dungeonEditor : ModuleRules
 			"LearningAgents",
 			"LearningAgentsTraining",
 			"LearningTraining",
-			"Json"
+			"Json",
+			"JsonUtilities",
+			"HTTP"
 		});
 	}
 }

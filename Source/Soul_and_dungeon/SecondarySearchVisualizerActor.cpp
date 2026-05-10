@@ -1,4 +1,6 @@
 #include "SecondarySearchVisualizerActor.h"
+#include "EngineUtils.h"
+#include "Kismet/GameplayStatics.h"
 
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/SplineMeshComponent.h"
@@ -578,20 +580,61 @@ void ASecondarySearchVisualizerActor::UpdateStatusHud(const FSecondarySearchResu
 
 	// Legend lines with metrics
 	const float LegendDuration = 0.18f;
-	GEngine->AddOnScreenDebugMessage(913703, LegendDuration, FColor(255, 140, 0), TEXT("  [Yellow] FINAL PATH"));
-	GEngine->AddOnScreenDebugMessage(913704, LegendDuration, FColor(215, 45, 255), TEXT("  [Pink] PREVIEW PATH"));
-	
-	GEngine->AddOnScreenDebugMessage(913705, LegendDuration, FColor::Red, FString::Printf(
-		TEXT("  [Red] A* SEARCH | Exp: %d | Time: %.2fms | Cost: %.0f"), 
-		Result.AStarCount, Result.AStarMs, Result.AStarCost));
-	
-	GEngine->AddOnScreenDebugMessage(913706, LegendDuration, FColor(0, 100, 255), FString::Printf(
-		TEXT("  [Blue] UCS SEARCH | Exp: %d | Time: %.2fms | Cost: %.0f"), 
-		Result.UCSCount, Result.UCSMs, Result.UCSCost));
-	
-	GEngine->AddOnScreenDebugMessage(913707, LegendDuration, FColor::Green, FString::Printf(
-		TEXT("  [Green] BFS SEARCH | Exp: %d | Time: %.2fms | Cost: %.0f"), 
-		Result.BFSCount, Result.BFSMs, Result.BFSCost));
+	if (Result.bIsLearningMode)
+	{
+		// Check for manager
+		bool bManagerExists = false;
+		if (UWorld* World = GetWorld())
+		{
+			// Try to find any actor with the manager component
+			for (TActorIterator<AActor> It(World); It; ++It)
+			{
+				TArray<UActorComponent*> Comps;
+				It->GetComponents(Comps);
+				for (UActorComponent* C : Comps)
+				{
+					// Using string comparison for the class name to handle both C++ and BP versions
+					FString ClassName = C->GetClass()->GetName();
+					if (ClassName.Contains(TEXT("LearningAgentsManager")))
+					{
+						bManagerExists = true;
+						break;
+					}
+				}
+				if (bManagerExists) break;
+			}
+		}
+
+		const FString ManagerStatus = bManagerExists ? TEXT("") : TEXT(" | <MANAGER MISSING!>");
+		const FString BenchmarkStatus = Result.bSuccess || Result.FailureReason.IsEmpty()
+			? TEXT("")
+			: FString::Printf(TEXT(" | <A* BENCHMARK ERR: %s>"), *Result.FailureReason);
+
+		GEngine->AddOnScreenDebugMessage(913703, LegendDuration, FColor(0, 255, 255), FString::Printf(
+			TEXT("  [Cyan] NEURAL NETWORK%s | Steering: %.2f | Align: %.2f"),
+			*ManagerStatus, Result.NNSteeringMag, Result.NNAlignment));
+		GEngine->AddOnScreenDebugMessage(913704, LegendDuration, FColor(215, 45, 255), TEXT("  [Pink] NN PATH HISTORY"));
+		GEngine->AddOnScreenDebugMessage(913705, LegendDuration, FColor::Red, FString::Printf(
+			TEXT("  [Red] A* BENCHMARK%s | Cost: %.0f | Fallbacks: %d"),
+			*BenchmarkStatus, Result.AStarCost, Result.NNFallbackTotal));
+	}
+	else
+	{
+		GEngine->AddOnScreenDebugMessage(913703, LegendDuration, FColor(255, 140, 0), TEXT("  [Yellow] FINAL PATH"));
+		GEngine->AddOnScreenDebugMessage(913704, LegendDuration, FColor(215, 45, 255), TEXT("  [Pink] PREVIEW PATH"));
+		
+		GEngine->AddOnScreenDebugMessage(913705, LegendDuration, FColor::Red, FString::Printf(
+			TEXT("  [Red] A* SEARCH | Exp: %d | Time: %.2fms | Cost: %.0f"), 
+			Result.AStarCount, Result.AStarMs, Result.AStarCost));
+		
+		GEngine->AddOnScreenDebugMessage(913706, LegendDuration, FColor(0, 100, 255), FString::Printf(
+			TEXT("  [Blue] UCS SEARCH | Exp: %d | Time: %.2fms | Cost: %.0f"), 
+			Result.UCSCount, Result.UCSMs, Result.UCSCost));
+		
+		GEngine->AddOnScreenDebugMessage(913707, LegendDuration, FColor::Green, FString::Printf(
+			TEXT("  [Green] BFS SEARCH | Exp: %d | Time: %.2fms | Cost: %.0f"), 
+			Result.BFSCount, Result.BFSMs, Result.BFSCost));
+	}
 }
 
 void ASecondarySearchVisualizerActor::UpdateFluidAnimation(float DeltaSeconds, float WorldSeconds)
