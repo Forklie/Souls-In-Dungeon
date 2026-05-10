@@ -10,6 +10,7 @@ class UCameraComponent;
 class UInputAction;
 class UInteractPromptWidget;
 class USoundBase;
+class UAnimMontage;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -101,7 +102,25 @@ public:
 	USoundBase* HitSound = nullptr;
 
 	FTimerHandle HitReactionTimerHandle;
+	FTimerHandle DeathUITimerHandle;
 	void OnHitReactionFinished();
+
+	// 💀 DEATH SYSTEM
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
+	UAnimMontage* DeathMontage = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
+	USoundBase* DeathSound = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
+	float DeathSoundStartTime = 0.5f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Combat")
+	bool bIsDead = false;
+
+	void PlayDeathSequence();
+
+	void OnDeathMontageEnded();
 
 	// 🔍 INTERACTION LOGIC
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction")

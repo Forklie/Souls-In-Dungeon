@@ -102,6 +102,25 @@ void AMyAIController::Tick(float DeltaTime)
 		return;
 	}
 
+	if (ASoul_and_dungeonCharacter* PlayerChar = Cast<ASoul_and_dungeonCharacter>(Player))
+	{
+		if (PlayerChar->bIsDead)
+		{
+			if (bIsCurrentlyAttacking)
+			{
+				bIsCurrentlyAttacking = false;
+				if (ACharacter* AICharacter = Cast<ACharacter>(AI))
+				{
+					if (UAnimInstance* AnimInstance = AICharacter->GetMesh()->GetAnimInstance())
+					{
+						SetAttackAnimationState(AnimInstance, bIsCurrentlyAttacking);
+					}
+				}
+			}
+			return; // Do nothing if player is dead
+		}
+	}
+
 	const float Distance = FVector::Dist(AI->GetActorLocation(), Player->GetActorLocation());
 	ACharacter* AICharacter = Cast<ACharacter>(AI);
 	if (!AICharacter)

@@ -18,6 +18,8 @@
 #include "Blueprint/UserWidget.h"
 #include "InteractPromptWidget.h"
 #include "TimerManager.h"
+#include "Animation/AnimMontage.h"
+#include "Animation/AnimInstance.h"
 
 namespace
 {
@@ -186,6 +188,8 @@ void ASoul_and_dungeonCharacter::DoJumpEnd()
 
 float ASoul_and_dungeonCharacter::TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, class AController* EventInstigator, AActor* DamageCauser)
 {
+	if (bIsDead) return 0.0f;
+
 	float ActualDamage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
 	
 	if (ActualDamage > 0.0f)
@@ -196,10 +200,10 @@ float ASoul_and_dungeonCharacter::TakeDamage(float DamageAmount, struct FDamageE
 		StartBackHitReaction();
 
 		// 💀 PLAYER DEAD
-		if (Health <= 0)
+		if (Health <= 0 && !bIsDead)
 		{
-			// 🔄 RESTART LEVEL
-			UGameplayStatics::OpenLevel(this, FName(*GetWorld()->GetName()));
+			bIsDead = true;
+			PlayDeathSequence();
 		}
 	}
 
@@ -519,5 +523,68 @@ void ASoul_and_dungeonCharacter::ToggleEnemyLearningMode()
 		FString ModeName = (NewMode == 2) ? TEXT("LEARNING (Neural Network)") : TEXT("SMOOTHED ASTAR (Deterministic)");
 		FColor DisplayColor = (NewMode == 2) ? FColor::Cyan : FColor::Orange;
 		GEngine->AddOnScreenDebugMessage(-1, 4.0f, DisplayColor, FString::Printf(TEXT("Enemy Navigation Mode: %s"), *ModeName));
+	}
+}
+
+void ASoul_and_dungeonCharacter::PlayDeathSequence()
+{
+	// Disable player input
+	if (APlayerController* PC = Cast<APlayerController>(GetController()))
+	{
+		DisableInput(PC);
+	}
+
+	// Stop any movement
+	GetCharacterMovement()->StopMovementImmediately();
+
+	// Disable collision so the corpse doesn't block anything
+	GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+	// Play death sound
+	if (DeathSound)
+	{
+		UGameplayStatics::PlaySoundAtLocation(this, DeathSound, GetActorLocation(), 1.0f, 1.0f, DeathSoundStartTime);
+	}
+
+	// Play the death montage (visual only — UI is on a fixed timer below)
+	if (DeathMontage)
+	{
+		UAnimInstance* AnimInst = GetMesh()->GetAnimInstance();
+		if (AnimInst)
+		{
+			AnimInst->Montage_Play(DeathMontage, 1.0f);
+		}
+	}
+
+	// Always show the death screen after 5 seconds, regardless of montage state
+	GetWorld()->GetTimerManager().SetTimer(DeathUITimerHandle, this,
+		&ASoul_and_dungeonCharacter::OnDeathMontageEnded, 5.0f, false);
+}
+
+void ASoul_and_dungeonCharacter::OnDeathMontageEnded()
+{
+	UE_LOG(LogSoul_and_dungeon, Log, TEXT("OnDeathMontageEnded: Showing death screen"));
+
+	// Show the "YOU DIED" restart screen
+	if (UClass* DeathWidgetClass = LoadClass<UUserWidget>(nullptr, TEXT("/Game/ThirdPerson/UI/WBP_DeathScreen.WBP_DeathScreen_C")))
+	{
+		APlayerController* PC = Cast<APlayerController>(GetController());
+		if (PC)
+		{
+			UUserWidget* DeathWidget = CreateWidget<UUserWidget>(PC, DeathWidgetClass);
+			if (DeathWidget)
+			{
+				DeathWidget->AddToViewport(100);
+			}
+
+			// Show mouse cursor and set UI input mode
+			PC->bShowMouseCursor = true;
+			FInputModeUIOnly UIMode;
+			if (DeathWidget)
+			{
+				UIMode.SetWidgetToFocus(DeathWidget->TakeWidget());
+			}
+			PC->SetInputMode(UIMode);
+		}
 	}
 }

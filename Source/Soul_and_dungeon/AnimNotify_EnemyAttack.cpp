@@ -54,6 +54,11 @@ void UAnimNotify_EnemyAttack::Notify(USkeletalMeshComponent* MeshComp, UAnimSequ
 			APawn* HitPawn = Cast<APawn>(Hit.GetActor());
 			if (HitPawn && HitPawn->IsPlayerControlled())
 			{
+				if (ASoul_and_dungeonCharacter* PlayerChar = Cast<ASoul_and_dungeonCharacter>(HitPawn))
+				{
+					if (PlayerChar->bIsDead) continue;
+				}
+
 				UGameplayStatics::ApplyDamage(
 					HitPawn,
 					DamageAmount,
