@@ -8,6 +8,7 @@
 #include "Components/SceneComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "Kismet/GameplayStatics.h"
 #include "GameFramework/Controller.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
@@ -472,6 +473,12 @@ void ASoul_and_dungeonCharacter::StartBackHitReaction()
 	// This ensures the blend-in is smooth rather than snapping
 	HitReactionOverlayWeightTarget = 1.0f;
 	bHitReactionOverlay = true;
+
+	// Play a random hit sound (SC_Kino_Hit SoundCue) at the character's location
+	if (HitSound)
+	{
+		UGameplayStatics::PlaySoundAtLocation(this, HitSound, GetActorLocation());
+	}
 
 	// Clear any existing timer so repeated hits restart the duration
 	GetWorld()->GetTimerManager().ClearTimer(HitReactionTimerHandle);

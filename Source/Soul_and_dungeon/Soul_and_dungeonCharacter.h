@@ -9,6 +9,7 @@ class USpringArmComponent;
 class UCameraComponent;
 class UInputAction;
 class UInteractPromptWidget;
+class USoundBase;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -94,6 +95,10 @@ public:
 	float HitReactionDuration = 0.5f;
 
 	void StartBackHitReaction();
+
+	// 🔊 HIT SOUND - assign SC_Kino_Hit SoundCue in Blueprint defaults
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
+	USoundBase* HitSound = nullptr;
 
 	FTimerHandle HitReactionTimerHandle;
 	void OnHitReactionFinished();
