@@ -265,7 +265,7 @@ void ACombatEnemy::HandleDeath()
 	OnEnemyDied.Broadcast();
 
 	// set up the death timer
-	GetWorld()->GetTimerManager().SetTimer(DeathTimer, this, &ACombatEnemy::RemoveFromLevel, DeathRemovalTime);
+	// GetWorld()->GetTimerManager().SetTimer(DeathTimer, this, &ACombatEnemy::RemoveFromLevel, DeathRemovalTime);
 }
 
 void ACombatEnemy::ApplyHealing(float Healing, AActor* Healer)

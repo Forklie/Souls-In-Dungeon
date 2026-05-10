@@ -8,6 +8,8 @@
 #include "MyAIController.generated.h"
 
 class UAnimInstance;
+class UAudioComponent;
+class USoundBase;
 class ASecondarySearchVisualizerActor;
 
 UENUM(BlueprintType)
@@ -88,8 +90,16 @@ private:
 	void HideSecondarySearchVisualizer();
 	void EnsureNavMeshBounds(APawn* AI, APawn* Player);
 	void SetAttackAnimationState(UAnimInstance* AnimInstance, bool bIsAttacking) const;
+	void UpdateChaseSound(APawn* AI, bool bShouldPlay);
+	void StopChaseSound();
 
 	float StopDistance = 150.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Audio")
+	TObjectPtr<USoundBase> SkeletonChaseSound = nullptr;
+
+	UPROPERTY()
+	TObjectPtr<UAudioComponent> ChaseAudioComponent = nullptr;
 
 
 

@@ -1,6 +1,7 @@
 #include "MyAIController.h"
 
 #include "Animation/AnimInstance.h"
+#include "Components/AudioComponent.h"
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
 #include "Engine/World.h"
@@ -13,10 +14,12 @@
 #include "NavigationSystem.h"
 #include "Navigation/PathFollowingComponent.h"
 #include "NavMesh/NavMeshBoundsVolume.h"
+#include "UObject/ConstructorHelpers.h"
 #include "LevelManager.h"
 #include "SecondarySearchVisualizerActor.h"
 #include "Soul_and_dungeon.h"
 #include "Soul_and_dungeonCharacter.h"
+#include "Sound/SoundBase.h"
 
 
 namespace
@@ -228,11 +231,56 @@ static FString ResolveEnemyInterceptPolicyPath(const FString& ConfiguredPath)
 AMyAIController::AMyAIController()
 {
 	PrimaryActorTick.bCanEverTick = true;
+
+	static ConstructorHelpers::FObjectFinder<USoundBase> DefaultChaseSound(TEXT("/Game/Audio/Skeleton_chase_sound.Skeleton_chase_sound"));
+	if (DefaultChaseSound.Succeeded())
+	{
+		SkeletonChaseSound = DefaultChaseSound.Object;
+	}
 }
 
 void AMyAIController::BeginPlay()
 {
 	Super::BeginPlay();
+}
+
+void AMyAIController::UpdateChaseSound(APawn* AI, bool bShouldPlay)
+{
+	if (!bShouldPlay || !AI || AI->ActorHasTag(TEXT("Dead")) || !SkeletonChaseSound)
+	{
+		StopChaseSound();
+		return;
+	}
+
+	if (!ChaseAudioComponent)
+	{
+		ChaseAudioComponent = UGameplayStatics::SpawnSoundAttached(
+			SkeletonChaseSound,
+			AI->GetRootComponent(),
+			NAME_None,
+			FVector::ZeroVector,
+			EAttachLocation::KeepRelativeOffset,
+			false,
+			0.85f,
+			1.0f,
+			0.0f,
+			nullptr,
+			nullptr,
+			false);
+	}
+
+	if (ChaseAudioComponent && !ChaseAudioComponent->IsPlaying())
+	{
+		ChaseAudioComponent->Play();
+	}
+}
+
+void AMyAIController::StopChaseSound()
+{
+	if (ChaseAudioComponent && ChaseAudioComponent->IsPlaying())
+	{
+		ChaseAudioComponent->FadeOut(0.15f, 0.0f);
+	}
 }
 
 
@@ -881,6 +929,27 @@ void AMyAIController::Tick(float DeltaTime)
 	APawn* AI = GetPawn();
 	if (!Player || !AI)
 	{
+		StopChaseSound();
+		return;
+	}
+
+	if (AI->ActorHasTag(TEXT("Dead")))
+	{
+		StopChaseSound();
+		if (bIsCurrentlyAttacking)
+		{
+			bIsCurrentlyAttacking = false;
+			if (ACharacter* AICharacter = Cast<ACharacter>(AI))
+			{
+				if (UAnimInstance* AnimInstance = AICharacter->GetMesh()->GetAnimInstance())
+				{
+					SetAttackAnimationState(AnimInstance, false);
+				}
+			}
+		}
+
+		StopMovement();
+		ResetAStarNavigation();
 		return;
 	}
 
@@ -902,6 +971,7 @@ void AMyAIController::Tick(float DeltaTime)
 					}
 				}
 
+				StopChaseSound();
 				StopMovement();
 				ResetAStarNavigation();
 				return;
@@ -923,6 +993,7 @@ void AMyAIController::Tick(float DeltaTime)
 						}
 					}
 				}
+				StopChaseSound();
 				return; // Do nothing if player is dead
 			}
 		}
@@ -931,6 +1002,7 @@ void AMyAIController::Tick(float DeltaTime)
 	ACharacter* AICharacter = Cast<ACharacter>(AI);
 	if (!AICharacter)
 	{
+		StopChaseSound();
 		return;
 	}
 
@@ -964,6 +1036,8 @@ void AMyAIController::Tick(float DeltaTime)
 	{
 		bIsCurrentlyAttacking = false;
 	}
+
+	UpdateChaseSound(AI, !bUsingTrainingTarget && !bIsCurrentlyAttacking && !bIsReacting);
 
 	if (bIsCurrentlyAttacking || bIsReacting)
 	{
