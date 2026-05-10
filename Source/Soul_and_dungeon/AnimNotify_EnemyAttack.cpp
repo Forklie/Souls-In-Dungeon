@@ -4,6 +4,7 @@
 #include "GameFramework/Pawn.h"
 #include "Engine/World.h"
 #include "Soul_and_dungeonCharacter.h"
+#include "LevelManager.h"
 #include "Kismet/GameplayStatics.h"
 #include "DrawDebugHelpers.h"
 
@@ -21,6 +22,14 @@ void UAnimNotify_EnemyAttack::Notify(USkeletalMeshComponent* MeshComp, UAnimSequ
 	if (!World)
 	{
 		return;
+	}
+
+	if (ALevelManager* LevelManager = ALevelManager::GetActiveLevelManager(OwnerActor))
+	{
+		if (LevelManager->IsObjectiveComplete())
+		{
+			return;
+		}
 	}
 
 	FVector TraceStart = OwnerActor->GetActorLocation() + (OwnerActor->GetActorForwardVector() * -30.0f); // Start slightly behind to catch point-blank

@@ -2,6 +2,8 @@
 
 #include "CoreMinimal.h"
 #include "AIController.h"
+#include "EnemyInterceptTypes.h"
+#include "EnemyInterceptTreePolicy.h"
 #include "SecondarySearchSolver.h"
 #include "MyAIController.generated.h"
 
@@ -12,48 +14,10 @@ UENUM(BlueprintType)
 enum class EEnemyNavigationMode : uint8
 {
 	AStarOnly,
-	SmoothedAStar,
-	LearningWithAStarFallback
+	SmoothedAStar
 };
 
-USTRUCT(BlueprintType)
-struct FEnemyLearningObservation
-{
-	GENERATED_BODY()
 
-	UPROPERTY(BlueprintReadOnly, Category = "Learning")
-	FVector DirectionToPlayer = FVector::ZeroVector;
-
-	UPROPERTY(BlueprintReadOnly, Category = "Learning")
-	FVector DirectionToPath = FVector::ZeroVector;
-
-	UPROPERTY(BlueprintReadOnly, Category = "Learning")
-	FVector Velocity = FVector::ZeroVector;
-
-	UPROPERTY(BlueprintReadOnly, Category = "Learning")
-	float DistanceToPlayer = 0.0f;
-
-	UPROPERTY(BlueprintReadOnly, Category = "Learning")
-	float DistanceToPathTarget = 0.0f;
-
-	UPROPERTY(BlueprintReadOnly, Category = "Learning")
-	float StuckSeconds = 0.0f;
-
-	UPROPERTY(BlueprintReadOnly, Category = "Learning")
-	float PathProgress = 0.0f;
-
-	UPROPERTY(BlueprintReadOnly, Category = "Learning")
-	bool bHasLineOfSight = false;
-
-	UPROPERTY(BlueprintReadOnly, Category = "Learning")
-	TArray<float> ObstacleProbes;
-
-	UPROPERTY(BlueprintReadOnly, Category = "Learning")
-	float RelativeAngleToPlayer = 0.0f;
-
-	UPROPERTY(BlueprintReadOnly, Category = "Learning")
-	bool bIsPathBlocked = false;
-};
 
 UCLASS()
 class SOUL_AND_DUNGEON_API AMyAIController : public AAIController
@@ -63,27 +27,55 @@ class SOUL_AND_DUNGEON_API AMyAIController : public AAIController
 public:
 	AMyAIController();
 
-	void GetEnemyLearningObservation(FEnemyLearningObservation& OutObservation) const;
-	FVector2D GetExpertLearningSteeringDirection() const;
-	void ApplyLearningSteeringInput(const FVector2D& MoveInput, float SpeedScale, bool bShouldRepath);
-
-	void UpdateLearningPathHistory(const FVector& AILocation);
-
 	int32 GetAStarFallbackCount() const;
-	void SetLearningTrainingPlayer(APawn* Player);
-	APawn* GetLearningTrainingPlayer() const;
+	int32 GetInvalidInterceptTargetCount() const;
+	int32 GetAStarReplanCount() const;
+	int32 GetAStarPathFailureCount() const;
+	float GetTrainingAttackRange() const;
+	void ResetEnemyInterceptMetricsForTraining();
+	void TickTrainingNavigationForCommandlet(float DeltaTime);
+
+	FEnemyInterceptObservation BuildInterceptObservation(APawn* PlayerPawn);
+	EEnemyInterceptMode ChooseDeterministicInterceptMode(const FEnemyInterceptObservation& Observation) const;
+	float GetPredictionTimeForMode(EEnemyInterceptMode Mode) const;
+	FVector ComputeGoalForInterceptMode(APawn* PlayerPawn, EEnemyInterceptMode Mode) const;
+	bool TryValidateInterceptGoal(const FVector& CandidateGoal, FVector& OutValidatedGoal, FString& OutReason) const;
+	FEnemyInterceptDecision ChooseSmartNavigationGoal(APawn* PlayerPawn);
+	int32 GetEnemyInterceptRuntimeMode() const;
+	FString GetEnemyInterceptRuntimeModeName() const;
+	bool ResolveInterceptModeFromRuntimeMode(int32 RuntimeMode, EEnemyInterceptMode& OutMode, FString& OutReason) const;
+	void CycleEnemyInterceptMode();
+
+	void SetTrainingInterceptOverride(EEnemyInterceptMode Mode);
+	void ClearTrainingInterceptOverride();
+	bool IsTrainingInterceptOverrideEnabled() const;
+	EEnemyInterceptMode GetTrainingInterceptOverrideMode() const;
+	void SetTrainingTargetPlayer(APawn* PlayerPawn);
+	void ClearTrainingTargetPlayer();
+
 
 protected:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaTime) override;
 
 private:
+	FEnemyInterceptDecision MakeCurrentPlayerLocationDecision(APawn* PlayerPawn, const FString& Reason) const;
+	bool IsInterceptPredictionEnabled() const;
+	bool LoadLearnedInterceptPolicyIfNeeded(FString& OutReason);
+	EEnemyInterceptMode ChooseLearnedInterceptModeOrFallback(const FEnemyInterceptObservation& Observation, FString& OutReason);
+	bool IsInterceptDebugLoggingEnabled() const;
+	void LogInterceptDecision(const FEnemyInterceptDecision& Decision, const FEnemyInterceptObservation& Observation, float CurrentTime);
+	void DrawInterceptDebug(APawn* PlayerPawn, const FEnemyInterceptObservation& Observation, const FEnemyInterceptDecision& Decision, const FString& SourceText) const;
 	void UpdateAStarNavigation(APawn* AI, APawn* Player, float CurrentTime, float DeltaTime);
 	void ResetAStarNavigation();
 	bool ShouldReplanAStarPath(const FVector& AILocation, const FVector& GoalLocation, float CurrentTime, const FSecondarySearchSettings& Settings) const;
 	bool BuildAStarPath(APawn* AI, const FVector& GoalLocation, const FSecondarySearchSettings& Settings);
 	bool BuildSmoothedPath(const TArray<FVector>& RawPath, const FSecondarySearchSettings& Settings, TArray<FVector>& OutPath) const;
 	bool HasClearNavigationSegment(const FVector& From, const FVector& To) const;
+	bool HasBlockingObstacleOnSegment(const FVector& From, const FVector& To) const;
+	bool HasAttackReach(APawn* AI, APawn* Player, float AttackDistance) const;
+	bool TryMoveAlongVerifiedPath(const FVector& PathTarget, float AcceptanceRadius);
+	bool TryDirectCommandletPathFollow(APawn* AI, const FVector& PathTarget, float DeltaTime, float AcceptanceRadius);
 	FVector CalculatePathFollowTarget(const FVector& AILocation, TArray<FVector>& Path, int32& WaypointIndex, const FSecondarySearchSettings& Settings) const;
 	void UpdateNavigationMetrics(APawn* AI, APawn* Player, const FVector& PathTarget, float DeltaTime, bool bUsedFallback);
 	EEnemyNavigationMode GetNavigationMode() const;
@@ -106,23 +98,33 @@ private:
 	int32 ActiveAStarWaypointIndex = 0;
 	int32 ActiveSmoothedWaypointIndex = 0;
 	FVector LastAStarGoal = FVector::ZeroVector;
+	FVector LastIssuedMoveTarget = FVector::ZeroVector;
+	FVector LastActivePathTarget = FVector::ZeroVector;
 	float LastAStarReplanTime = -1000000.0f;
+	float LastMoveIssueTime = -1000000.0f;
 	float AStarReplanInterval = 0.35f;
 	float SmoothedPathLookAheadDistance = 260.0f;
-	float LearningSteeringProjectionDistance = 260.0f;
-	
-	TArray<FVector> LearningPathHistory;
-
-	FVector2D LastLearningSteeringInput = FVector2D::ZeroVector;
-	float LastLearningSpeedScale = 1.0f;
-	float LastLearningSteeringTime = -1000000.0f;
-	float LearningSteeringMaxAge = 0.25f;
-	FEnemyLearningObservation LastLearningObservation;
-	TWeakObjectPtr<APawn> LearningTrainingPlayer;
 	FVector LastNavigationLocation = FVector::ZeroVector;
 	float StuckSeconds = 0.0f;
 	float LastPathProgress = 0.0f;
 	int32 AStarFallbackCount = 0;
+	int32 InvalidInterceptTargetCount = 0;
+	int32 AStarReplanCount = 0;
+	int32 AStarPathFailureCount = 0;
+	bool bOverrideInterceptModeForTraining = false;
+	EEnemyInterceptMode TrainingOverrideInterceptMode = EEnemyInterceptMode::CurrentLocation;
+	UPROPERTY()
+	TObjectPtr<APawn> TrainingTargetPlayer;
+	FVector LastPlayerMoveDirectionForIntercept = FVector::ZeroVector;
+	float LastPlayerDirectionChangeTime = -1000000.0f;
+	float LastInterceptDebugLogTime = -1000000.0f;
+	float LastLearnedPolicyLoadWarningTime = -1000000.0f;
+	EEnemyInterceptMode LastLoggedInterceptMode = EEnemyInterceptMode::CurrentLocation;
+	bool bHasLoggedInterceptMode = false;
+	bool bHasIssuedMoveTarget = false;
+	bool bLastIssuedMoveWasFallback = false;
+	FString LastLearnedPolicyPath;
+	FEnemyInterceptTreePolicy LearnedInterceptPolicy;
 
 	FSecondarySearchSettings SecondarySearchSettings;
 	FSecondarySearchSettings ActiveSecondarySearchSettings;
@@ -163,4 +165,3 @@ private:
 	float MinAttackDuration = 0.8f; // Ensure at least one full swing can play
 	float AttackHysteresis = 80.0f; // Distance buffer to prevent rapid switching
 };
-

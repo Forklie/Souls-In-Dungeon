@@ -48,7 +48,6 @@ Typical use cases:
 - If the task is primarily animation, Blueprint, material, Niagara, UI, config, or source search, use Monolith first.
 - If the task is primarily editor orchestration, actor/level work, PIE, screenshots, logs, build/test, or project settings, use Unreal MCP first.
 - If both apply, use Monolith for asset/graph mutation and Unreal MCP for editor/session/system control.
-- If Monolith is already live and the task touches `ABP_Kino` or related Souls animation assets, prefer Monolith before falling back to manual editor work.
 
 ## Current Local Endpoints
 

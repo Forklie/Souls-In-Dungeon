@@ -16,9 +16,6 @@ public class Soul_and_dungeonEditor : ModuleRules
 			"Soul_and_dungeon",
 			"AIModule",
 			"NavigationSystem",
-			"LearningAgents",
-			"LearningAgentsTraining",
-			"LearningTraining",
 			"Json",
 			"JsonUtilities",
 			"HTTP"

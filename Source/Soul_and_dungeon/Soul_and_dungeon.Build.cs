@@ -16,11 +16,12 @@ public class Soul_and_dungeon : ModuleRules
 			"EnhancedInput",
 			"AIModule",
 			"NavigationSystem",
-			"LearningAgents",
+			"Json",
 			"StateTreeModule",
 			"GameplayStateTreeModule",
 			"UMG",
-			"Slate"
+			"Slate",
+			"SlateCore"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] { });
