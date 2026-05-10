@@ -69,7 +69,9 @@ static bool GetBoolParamValue(const FString& Params, const TCHAR* Name, bool Def
 
 static FString ResolveProjectOutputPath(const FString& OutputPath)
 {
-	return FPaths::IsRelative(OutputPath) ? FPaths::ConvertRelativePathToFull(FPaths::ProjectDir(), OutputPath) : OutputPath;
+	FString AbsPath = FPaths::IsRelative(OutputPath) ? FPaths::ConvertRelativePathToFull(FPaths::ProjectDir(), OutputPath) : OutputPath;
+	FPaths::CollapseRelativeDirectories(AbsPath);
+	return AbsPath;
 }
 
 static bool SaveNetworkAsset(ULearningAgentsNeuralNetwork* Network, const FString& AssetPath)
@@ -196,6 +198,7 @@ int32 UEnemyLearningTrainCommandlet::Main(const FString& Params)
 	}
 
 	TArray<AMyAIController*> ParallelControllers;
+	TArray<APawn*> ParallelPlayerPawns;
 	TArray<TUniquePtr<FLMStudioPlayerDriver>> ParallelDrivers;
 
 	FLMStudioPlayerDriverSettings PlayerDriverSettings;
@@ -205,6 +208,9 @@ int32 UEnemyLearningTrainCommandlet::Main(const FString& Params)
 	PlayerDriverSettings.TimeoutSeconds = LMStudioTimeout;
 	PlayerDriverSettings.Seed = Seed;
 
+	// Use a unique run suffix to prevent name collisions with stale actors from previous sessions
+	const uint32 RunId = FMath::Rand();
+
 	for (int32 i = 0; i < ParallelCount; ++i)
 	{
 		const FVector Offset(i * 2500.0f, 0.0f, 0.0f);
@@ -212,27 +218,55 @@ int32 UEnemyLearningTrainCommandlet::Main(const FString& Params)
 		const FVector EnemyLoc = FVector(700.0f, 0.0f, 100.0f) + Offset;
 
 		FActorSpawnParameters PlayerSpawnParams;
-		PlayerSpawnParams.Name = FName(*FString::Printf(TEXT("TrainingPlayer_%d"), i));
+		PlayerSpawnParams.Name = FName(*FString::Printf(TEXT("TrainingPlayer_%u_%d"), RunId, i));
+		PlayerSpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+		FActorSpawnParameters EnemySpawnParams;
+		EnemySpawnParams.Name = FName(*FString::Printf(TEXT("TrainingEnemy_%u_%d"), RunId, i));
+		EnemySpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+		FActorSpawnParameters ControllerSpawnParams;
+		ControllerSpawnParams.Name = FName(*FString::Printf(TEXT("TrainingController_%u_%d"), RunId, i));
+		ControllerSpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
 		APawn* CurrentPlayerPawn = World->SpawnActor<APawn>(APawn::StaticClass(), PlayerLoc, FRotator::ZeroRotator, PlayerSpawnParams);
+		ACharacter* EnemyCharacter = World->SpawnActor<ACharacter>(ACharacter::StaticClass(), EnemyLoc, FRotator::ZeroRotator, EnemySpawnParams);
+		AMyAIController* CurrentEnemyController = World->SpawnActor<AMyAIController>(AMyAIController::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, ControllerSpawnParams);
 
-		ACharacter* EnemyCharacter = World->SpawnActor<ACharacter>(ACharacter::StaticClass(), EnemyLoc, FRotator::ZeroRotator);
-		AMyAIController* CurrentEnemyController = World->SpawnActor<AMyAIController>(AMyAIController::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator);
-		
-		if (CurrentEnemyController && EnemyCharacter && CurrentPlayerPawn)
+		if (!CurrentPlayerPawn)
 		{
-			CurrentEnemyController->Possess(EnemyCharacter);
-			CurrentEnemyController->SetLearningTrainingPlayer(CurrentPlayerPawn);
-			ParallelControllers.Add(CurrentEnemyController);
-
-			TUniquePtr<FLMStudioPlayerDriver> Driver = MakeUnique<FLMStudioPlayerDriver>();
-			Driver->Configure(PlayerDriverSettings);
-			Driver->Reset(
-				CurrentPlayerPawn,
-				CurrentEnemyController,
-				bUseLMStudioPlayer ? ELMStudioPlayerBehavior::LMStudioEvasive : ELMStudioPlayerBehavior::DeterministicEvasive,
-				CurrentPlayerPawn->GetActorLocation());
-			ParallelDrivers.Add(MoveTemp(Driver));
+			UE_LOG(LogTemp, Error, TEXT("EnemyLearningTrain: Failed to spawn TrainingPlayer_%u_%d"), RunId, i);
+			continue;
 		}
+		if (!EnemyCharacter)
+		{
+			UE_LOG(LogTemp, Error, TEXT("EnemyLearningTrain: Failed to spawn TrainingEnemy_%u_%d"), RunId, i);
+			CurrentPlayerPawn->Destroy();
+			continue;
+		}
+		if (!CurrentEnemyController)
+		{
+			UE_LOG(LogTemp, Error, TEXT("EnemyLearningTrain: Failed to spawn TrainingController_%u_%d"), RunId, i);
+			CurrentPlayerPawn->Destroy();
+			EnemyCharacter->Destroy();
+			continue;
+		}
+
+		CurrentEnemyController->Possess(EnemyCharacter);
+		CurrentEnemyController->SetLearningTrainingPlayer(CurrentPlayerPawn);
+		ParallelControllers.Add(CurrentEnemyController);
+		ParallelPlayerPawns.Add(CurrentPlayerPawn);
+
+		TUniquePtr<FLMStudioPlayerDriver> Driver = MakeUnique<FLMStudioPlayerDriver>();
+		Driver->Configure(PlayerDriverSettings);
+		Driver->Reset(
+			CurrentPlayerPawn,
+			CurrentEnemyController,
+			bUseLMStudioPlayer ? ELMStudioPlayerBehavior::LMStudioEvasive : ELMStudioPlayerBehavior::DeterministicEvasive,
+			CurrentPlayerPawn->GetActorLocation());
+		ParallelDrivers.Add(MoveTemp(Driver));
+
+		UE_LOG(LogTemp, Display, TEXT("EnemyLearningTrain: Spawned agent pair %d at offset (%.0f, 0, 0)"), i, Offset.X);
 	}
 
 	if (ParallelControllers.Num() == 0)
@@ -241,27 +275,44 @@ int32 UEnemyLearningTrainCommandlet::Main(const FString& Params)
 		return 1;
 	}
 
+	UE_LOG(LogTemp, Display, TEXT("EnemyLearningTrain: Successfully spawned %d / %d parallel agent pairs"), ParallelControllers.Num(), ParallelCount);
+
 	if (IConsoleVariable* ModeCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("sd.EnemyNavigation.Mode")))
 	{
 		ModeCVar->Set(2, ECVF_SetByCode);
 	}
 
 	AActor* ManagerOwner = World->SpawnActor<AActor>();
-	ULearningAgentsManager* Manager = NewObject<ULearningAgentsManager>(ManagerOwner, TEXT("EnemyLearningAgentsManager"));
-	Manager->SetMaxAgentNum(ParallelCount);
+	ULearningAgentsManager* Manager = NewObject<ULearningAgentsManager>(ManagerOwner);
+	Manager->SetMaxAgentNum(ParallelControllers.Num());
 	Manager->RegisterComponent();
+	Manager->RemoveAllAgents(); // Ensure a clean pool based on MaxAgentNum
+
+	TArray<UObject*> AgentObjects;
+	for (AMyAIController* Controller : ParallelControllers)
+	{
+		AgentObjects.Add(Controller);
+	}
+
+	TArray<int32> AgentIds;
+	Manager->AddAgents(AgentIds, AgentObjects);
+
+	if (AgentIds.Num() != ParallelControllers.Num())
+	{
+		UE_LOG(LogTemp, Error, TEXT("EnemyLearningTrain: Failed to register all agents! Expected %d, got %d"), ParallelControllers.Num(), AgentIds.Num());
+		return 1;
+	}
+
+	for (int32 i = 0; i < AgentIds.Num(); ++i)
+	{
+		UE_LOG(LogTemp, Display, TEXT("EnemyLearningTrain: Registered Agent %d (Ptr: %p) → Learning ID %d"), i, ParallelControllers[i], AgentIds[i]);
+	}
 
 	ULearningAgentsManager* ManagerRef = Manager;
 	ULearningAgentsInteractor* Interactor = ULearningAgentsInteractor::MakeInteractor(ManagerRef, UEnemyLearningInteractor::StaticClass(), TEXT("EnemyLearningInteractor"));
 	ULearningAgentsTrainingEnvironment* TrainingEnvironmentBase = ULearningAgentsTrainingEnvironment::MakeTrainingEnvironment(ManagerRef, UEnemyLearningTrainingEnvironment::StaticClass(), TEXT("EnemyLearningTrainingEnvironment"));
 	UEnemyLearningTrainingEnvironment* TrainingEnvironment = CastChecked<UEnemyLearningTrainingEnvironment>(TrainingEnvironmentBase);
 	TrainingEnvironment->Configure(MaxEpisodeSteps, 150.0f);
-
-	for (int32 i = 0; i < ParallelControllers.Num(); ++i)
-	{
-		const int32 AgentId = Manager->AddAgent(ParallelControllers[i]);
-		UE_LOG(LogTemp, Display, TEXT("EnemyLearningTrain: Registered Parallel Agent %d with ID %d"), i, AgentId);
-	}
 
 	ULearningAgentsPolicy* Policy = ULearningAgentsPolicy::MakePolicy(ManagerRef, Interactor, ULearningAgentsPolicy::StaticClass(), TEXT("EnemySteeringPolicy"));
 	ULearningAgentsPolicy* PolicyRef = Policy;

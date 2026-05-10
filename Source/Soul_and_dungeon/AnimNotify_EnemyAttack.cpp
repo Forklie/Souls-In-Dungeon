@@ -1,6 +1,7 @@
 #include "AnimNotify_EnemyAttack.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/Actor.h"
+#include "GameFramework/Pawn.h"
 #include "Engine/World.h"
 #include "Soul_and_dungeonCharacter.h"
 #include "Kismet/GameplayStatics.h"
@@ -30,14 +31,18 @@ void UAnimNotify_EnemyAttack::Notify(USkeletalMeshComponent* MeshComp, UAnimSequ
 
 	FCollisionQueryParams QueryParams;
 	QueryParams.AddIgnoredActor(OwnerActor);
+	QueryParams.bFindInitialOverlaps = true;
 
-	// Sweep for players (Pawn trace channel)
-	bool bHit = World->SweepMultiByChannel(
+	FCollisionObjectQueryParams ObjectParams;
+	ObjectParams.AddObjectTypesToQuery(ECC_Pawn);
+
+	// Only query pawns so nearby props or object boxes cannot consume the attack hit.
+	bool bHit = World->SweepMultiByObjectType(
 		HitResults,
 		TraceStart,
 		TraceEnd,
 		FQuat::Identity,
-		ECC_Pawn,
+		ObjectParams,
 		Sphere,
 		QueryParams
 	);
@@ -46,10 +51,11 @@ void UAnimNotify_EnemyAttack::Notify(USkeletalMeshComponent* MeshComp, UAnimSequ
 	{
 		for (const FHitResult& Hit : HitResults)
 		{
-			if (Hit.GetActor())
+			APawn* HitPawn = Cast<APawn>(Hit.GetActor());
+			if (HitPawn && HitPawn->IsPlayerControlled())
 			{
 				UGameplayStatics::ApplyDamage(
-					Hit.GetActor(),
+					HitPawn,
 					DamageAmount,
 					OwnerActor->GetInstigatorController(),
 					OwnerActor,

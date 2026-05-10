@@ -150,7 +150,9 @@ static FString JsonEscape(const FString& Value)
 
 static FString ResolveProjectOutputPath(const FString& OutputPath)
 {
-	return FPaths::IsRelative(OutputPath) ? FPaths::ConvertRelativePathToFull(FPaths::ProjectDir(), OutputPath) : OutputPath;
+	FString AbsPath = FPaths::IsRelative(OutputPath) ? FPaths::ConvertRelativePathToFull(FPaths::ProjectDir(), OutputPath) : OutputPath;
+	FPaths::CollapseRelativeDirectories(AbsPath);
+	return AbsPath;
 }
 
 static bool WriteEvalJson(const FString& OutputPath, const FString& PolicyPath, const FString& BehaviorName, bool bUsedPolicy, const FEnemyEvalMetrics& Metrics)
@@ -247,12 +249,22 @@ int32 UEnemyLearningEvaluateCommandlet::Main(const FString& Params)
 	}
 
 	AActor* ManagerOwner = World->SpawnActor<AActor>();
-	ULearningAgentsManager* Manager = NewObject<ULearningAgentsManager>(ManagerOwner, TEXT("EnemyLearningEvalAgentsManager"));
+	ULearningAgentsManager* Manager = NewObject<ULearningAgentsManager>(ManagerOwner);
 	Manager->SetMaxAgentNum(1);
 	Manager->RegisterComponent();
+	Manager->RemoveAllAgents();
+	
 	ULearningAgentsManager* ManagerRef = Manager;
 	ULearningAgentsInteractor* Interactor = ULearningAgentsInteractor::MakeInteractor(ManagerRef, UEnemyLearningInteractor::StaticClass(), TEXT("EnemyLearningEvalInteractor"));
-	Manager->AddAgent(EnemyController);
+	
+	const int32 AgentId = Manager->AddAgent(EnemyController);
+	UE_LOG(LogTemp, Display, TEXT("EnemyLearningEvaluate: Registered Agent (Ptr: %p) → Learning ID %d"), EnemyController, AgentId);
+	
+	if (AgentId < 0)
+	{
+		UE_LOG(LogTemp, Error, TEXT("EnemyLearningEvaluate: Failed to register agent!"));
+		return 1;
+	}
 
 	ULearningAgentsPolicy* Policy = nullptr;
 	if (bUsePolicy)
