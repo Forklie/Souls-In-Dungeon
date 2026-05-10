@@ -46,6 +46,9 @@ protected:
 	/** Input mapping context setup */
 	virtual void SetupInputComponent() override;
 
+	/** Toggle secondary search debug drawing */
+	void ToggleSecondarySearchDebug();
+
 	/** Returns true if the player should use UMG touch controls */
 	bool ShouldUseTouchControls() const;
 

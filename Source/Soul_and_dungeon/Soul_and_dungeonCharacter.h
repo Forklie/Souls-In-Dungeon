@@ -8,6 +8,9 @@
 class USpringArmComponent;
 class UCameraComponent;
 class UInputAction;
+class UInteractPromptWidget;
+class USoundBase;
+class UAnimMontage;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -41,9 +44,11 @@ public:
 
 	ASoul_and_dungeonCharacter();
 
+	virtual void Tick(float DeltaTime) override;
+
 protected:
 
-	virtual void BeginPlay() override;   // ✅ ADD THIS
+	virtual void BeginPlay() override;
 
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
@@ -65,12 +70,87 @@ public:
 	virtual void DoJumpEnd();
 
 	// ❤️ HEALTH
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
 	float Health = 100.0f;
 
-	// 💥 DAMAGE FUNCTION
-	UFUNCTION(BlueprintCallable)
-	void TakeDamageSimple(float DamageAmount);
+	// 💥 NATIVE DAMAGE OVERRIDE
+	virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, class AController* EventInstigator, AActor* DamageCauser) override;
+
+	// 🎬 HIT REACTION OVERLAY (drives ABP_Kino LayeredBoneBlend)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
+	float HitReactionOverlayWeight = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
+	float HitReactionOverlayWeightTarget = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
+	bool bHitReactionOverlay = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
+	float HitReactionBlendInSpeed = 15.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
+	float HitReactionBlendOutSpeed = 5.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
+	float HitReactionDuration = 0.5f;
+
+	void StartBackHitReaction();
+
+	// 🔊 HIT SOUND - assign SC_Kino_Hit SoundCue in Blueprint defaults
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
+	USoundBase* HitSound = nullptr;
+
+	FTimerHandle HitReactionTimerHandle;
+	FTimerHandle DeathUITimerHandle;
+	void OnHitReactionFinished();
+
+	// 💀 DEATH SYSTEM
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
+	UAnimMontage* DeathMontage = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
+	USoundBase* DeathSound = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
+	float DeathSoundStartTime = 0.5f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Combat")
+	bool bIsDead = false;
+
+	void PlayDeathSequence();
+
+	void OnDeathMontageEnded();
+
+	// 🔍 INTERACTION LOGIC
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction")
+	float InteractTraceDistance = 500.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction")
+	UInputAction* InteractAction;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Interaction")
+	AActor* CurrentInteractable;
+
+	UFUNCTION(BlueprintCallable, Category = "Interaction")
+	void TraceForInteractables();
+
+	UFUNCTION(BlueprintCallable, Category = "Interaction")
+	void DoInteract();
+
+	/** Toggles the enemy navigation mode between Learning (2) and Smoothed AStar (1) */
+	void ToggleEnemyLearningMode();
+
+	// 🖼️ INTERACTION UI  (pure C++ — no blueprint widget needed)
+	UPROPERTY(BlueprintReadOnly, Category = "Interaction")
+	UInteractPromptWidget* InteractPromptWidget;
+
+private:
+	bool IsInteractableActor(AActor* Actor) const;
+	bool IsDoorActor(AActor* Actor) const;
+	bool IsChestActor(AActor* Actor) const;
+	bool IsChestOpen(AActor* Actor) const;
+	FString GetInteractPromptText(AActor* Actor) const;
 
 public:
 

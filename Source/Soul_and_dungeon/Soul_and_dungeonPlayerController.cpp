@@ -2,10 +2,13 @@
 
 
 #include "Soul_and_dungeonPlayerController.h"
+#include "Components/InputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Engine/LocalPlayer.h"
+#include "InputCoreTypes.h"
 #include "InputMappingContext.h"
 #include "Blueprint/UserWidget.h"
+#include "SecondarySearchSolver.h"
 #include "Soul_and_dungeon.h"
 #include "Widgets/Input/SVirtualJoystick.h"
 
@@ -40,6 +43,11 @@ void ASoul_and_dungeonPlayerController::SetupInputComponent()
 	// only add IMCs for local player controllers
 	if (IsLocalPlayerController())
 	{
+		if (InputComponent)
+		{
+			InputComponent->BindKey(EKeys::B, IE_Pressed, this, &ASoul_and_dungeonPlayerController::ToggleSecondarySearchDebug);
+		}
+
 		// Add Input Mapping Contexts
 		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))
 		{
@@ -58,6 +66,11 @@ void ASoul_and_dungeonPlayerController::SetupInputComponent()
 			}
 		}
 	}
+}
+
+void ASoul_and_dungeonPlayerController::ToggleSecondarySearchDebug()
+{
+	FSecondarySearchDebug::Toggle();
 }
 
 bool ASoul_and_dungeonPlayerController::ShouldUseTouchControls() const

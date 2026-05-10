@@ -15,6 +15,8 @@ public class Soul_and_dungeon : ModuleRules
 			"InputCore",
 			"EnhancedInput",
 			"AIModule",
+			"NavigationSystem",
+			"LearningAgents",
 			"StateTreeModule",
 			"GameplayStateTreeModule",
 			"UMG",
