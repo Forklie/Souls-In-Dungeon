@@ -17,6 +17,7 @@ class UMinimapWidget;
 class ALevelManager;
 class USoundBase;
 class UAnimMontage;
+class UAnimSequenceBase;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -120,7 +121,42 @@ public:
 
 	FTimerHandle HitReactionTimerHandle;
 	FTimerHandle DeathUITimerHandle;
+	FTimerHandle AttackTraceTimerHandle;
+	FTimerHandle AttackEndTimerHandle;
 	void OnHitReactionFinished();
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Attack")
+	UInputAction* AttackAction = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Attack")
+	UAnimSequenceBase* AttackAnimation = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Attack", meta = (ClampMin = "0.0"))
+	float AttackDamage = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Attack", meta = (ClampMin = "1.0"))
+	float EnemyMaxHealth = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Attack", meta = (ClampMin = "0.0"))
+	float AttackTraceDelay = 0.35f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Attack", meta = (ClampMin = "0.0"))
+	float AttackCooldown = 0.85f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Attack", meta = (ClampMin = "1.0"))
+	float AttackTraceRadius = 85.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Attack", meta = (ClampMin = "1.0"))
+	float AttackTraceDistance = 190.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Combat|Attack")
+	bool bIsAttacking = false;
+
+	UFUNCTION(BlueprintCallable, Category = "Combat|Attack")
+	void DoAttack();
+
+	void PerformAttackTrace();
+	void FinishAttack();
 
 	// 💀 DEATH SYSTEM
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")

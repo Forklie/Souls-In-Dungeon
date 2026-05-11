@@ -7,6 +7,7 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SceneCaptureComponent2D.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
@@ -25,13 +26,18 @@
 #include "DungeonGenerator.h"
 #include "LevelManager.h"
 #include "TimerManager.h"
+#include "AIController.h"
 #include "Animation/AnimMontage.h"
 #include "Animation/AnimInstance.h"
+#include "Animation/AnimSequenceBase.h"
+#include "Animation/AnimSequence.h"
 #include "SecondarySearchSolver.h"
 #include "HAL/IConsoleManager.h"
 
 namespace
 {
+	TMap<TWeakObjectPtr<AActor>, float> GEnemyHealthByActor;
+
 	bool NameLooksLikeDoor(const FString& Name)
 	{
 		return Name.Contains(TEXT("BP_COMP_Door_Interactive_Large"), ESearchCase::IgnoreCase);
@@ -40,6 +46,65 @@ namespace
 	bool NameLooksLikeChest(const FString& Name)
 	{
 		return Name.Contains(TEXT("BP_PROP_chest_Interactive"), ESearchCase::IgnoreCase);
+	}
+
+	void KillEnemyActor(AActor* Enemy, const FVector& AttackDirection)
+	{
+		if (!Enemy || Enemy->ActorHasTag(TEXT("Dead")))
+		{
+			return;
+		}
+
+		Enemy->Tags.AddUnique(TEXT("Dead"));
+		Enemy->SetCanBeDamaged(false);
+
+		if (APawn* EnemyPawn = Cast<APawn>(Enemy))
+		{
+			if (AAIController* AIController = Cast<AAIController>(EnemyPawn->GetController()))
+			{
+				AIController->StopMovement();
+			}
+		}
+
+		if (ACharacter* EnemyCharacter = Cast<ACharacter>(Enemy))
+		{
+			// Load and play the skeleton death sound
+			USoundBase* SkeletonDeathSound = Cast<USoundBase>(StaticLoadObject(USoundBase::StaticClass(), nullptr, TEXT("/Game/Characters/Skeleton/Sound/Skeleton_death.Skeleton_death")));
+			if (SkeletonDeathSound)
+			{
+				UGameplayStatics::PlaySoundAtLocation(EnemyCharacter, SkeletonDeathSound, EnemyCharacter->GetActorLocation());
+			}
+
+			if (UCharacterMovementComponent* MovementComponent = EnemyCharacter->GetCharacterMovement())
+			{
+				MovementComponent->StopMovementImmediately();
+				MovementComponent->DisableMovement();
+			}
+
+			EnemyCharacter->GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			if (USkeletalMeshComponent* MeshComponent = EnemyCharacter->GetMesh())
+			{
+				UAnimSequence* DeathAnim = Cast<UAnimSequence>(StaticLoadObject(UAnimSequence::StaticClass(), nullptr, TEXT("/Game/Characters/Skeleton/Animation/Mini_skeleton_Orc_Death.Mini_skeleton_Orc_Death")));
+				if (DeathAnim)
+				{
+					MeshComponent->SetSimulatePhysics(false);
+					MeshComponent->SetCollisionProfileName(TEXT("NoCollision"));
+					MeshComponent->PlayAnimation(DeathAnim, false);
+				}
+				else
+				{
+					MeshComponent->SetCollisionProfileName(TEXT("Ragdoll"));
+					MeshComponent->SetSimulatePhysics(true);
+					MeshComponent->AddImpulse((AttackDirection.GetSafeNormal2D() + FVector(0.0f, 0.0f, 0.35f)) * 35000.0f, NAME_None, true);
+				}
+			}
+		}
+		else
+		{
+			Enemy->SetActorEnableCollision(false);
+		}
+
+		GEnemyHealthByActor.Remove(TWeakObjectPtr<AActor>(Enemy));
 	}
 }
 
@@ -120,6 +185,12 @@ ASoul_and_dungeonCharacter::ASoul_and_dungeonCharacter()
 
 	PrimaryActorTick.bCanEverTick = true; // Make sure tick is enabled
 	Health = MaxHealth;
+
+	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> DefaultAttackAnimation(TEXT("/Game/Characters/Kino/Animations/Player_Standing_Melee_Attack_Downward.Player_Standing_Melee_Attack_Downward"));
+	if (DefaultAttackAnimation.Succeeded())
+	{
+		AttackAnimation = DefaultAttackAnimation.Object;
+	}
 }
 
 void ASoul_and_dungeonCharacter::Tick(float DeltaTime)
@@ -194,6 +265,13 @@ void ASoul_and_dungeonCharacter::SetupPlayerInputComponent(UInputComponent* Play
 
 
 		// 🧠 DEBUG TOGGLE: 'M' for Algorithm Cycle
+		if (AttackAction)
+		{
+			EnhancedInputComponent->BindAction(AttackAction, ETriggerEvent::Started, this, &ASoul_and_dungeonCharacter::DoAttack);
+		}
+
+		PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ASoul_and_dungeonCharacter::DoAttack);
+		PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Right, IE_Pressed, this, &ASoul_and_dungeonCharacter::DoAttack);
 		PlayerInputComponent->BindKey(EKeys::M, IE_Pressed, this, &ASoul_and_dungeonCharacter::CycleSearchAlgorithm);
 	}
 	else
@@ -260,6 +338,127 @@ void ASoul_and_dungeonCharacter::DoJumpEnd()
 {
 	// signal the character to stop jumping
 	StopJumping();
+}
+
+void ASoul_and_dungeonCharacter::DoAttack()
+{
+	if (bIsDead || bIsAttacking || !GetWorld())
+	{
+		return;
+	}
+
+	bIsAttacking = true;
+	GetWorld()->GetTimerManager().ClearTimer(AttackTraceTimerHandle);
+	GetWorld()->GetTimerManager().ClearTimer(AttackEndTimerHandle);
+
+	float AttackLength = AttackCooldown;
+	if (AttackAnimation)
+	{
+		if (UAnimInstance* AnimInstance = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr)
+		{
+			if (UAnimMontage* Montage = AnimInstance->PlaySlotAnimationAsDynamicMontage(
+				AttackAnimation,
+				TEXT("DefaultSlot"),
+				0.08f,
+				0.18f,
+				1.0f,
+				1))
+			{
+				AttackLength = FMath::Max(AttackCooldown, Montage->GetPlayLength() * 0.65f);
+			}
+		}
+	}
+
+	GetWorld()->GetTimerManager().SetTimer(
+		AttackTraceTimerHandle,
+		this,
+		&ASoul_and_dungeonCharacter::PerformAttackTrace,
+		AttackTraceDelay,
+		false);
+
+	GetWorld()->GetTimerManager().SetTimer(
+		AttackEndTimerHandle,
+		this,
+		&ASoul_and_dungeonCharacter::FinishAttack,
+		AttackLength,
+		false);
+}
+
+void ASoul_and_dungeonCharacter::PerformAttackTrace()
+{
+	if (bIsDead || !GetWorld())
+	{
+		return;
+	}
+
+	const FVector TraceStart = GetActorLocation() + FVector(0.0f, 0.0f, 55.0f);
+	const FVector TraceEnd = TraceStart + (GetActorForwardVector() * AttackTraceDistance);
+
+	TArray<FHitResult> HitResults;
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(KinoSwordAttack), false);
+	QueryParams.AddIgnoredActor(this);
+	QueryParams.bFindInitialOverlaps = true;
+
+	FCollisionObjectQueryParams ObjectParams;
+	ObjectParams.AddObjectTypesToQuery(ECC_Pawn);
+
+	const bool bHit = GetWorld()->SweepMultiByObjectType(
+		HitResults,
+		TraceStart,
+		TraceEnd,
+		FQuat::Identity,
+		ObjectParams,
+		FCollisionShape::MakeSphere(AttackTraceRadius),
+		QueryParams);
+
+	if (!bHit)
+	{
+		return;
+	}
+
+	AActor* BestTarget = nullptr;
+	float BestDistanceSq = TNumericLimits<float>::Max();
+
+	for (const FHitResult& Hit : HitResults)
+	{
+		APawn* HitPawn = Cast<APawn>(Hit.GetActor());
+		if (!HitPawn || HitPawn == this || HitPawn->IsPlayerControlled())
+		{
+			continue;
+		}
+
+		if (HitPawn->ActorHasTag(TEXT("Dead")))
+		{
+			continue;
+		}
+
+		const float DistanceSq = FVector::DistSquared(HitPawn->GetActorLocation(), GetActorLocation());
+		if (DistanceSq < BestDistanceSq)
+		{
+			BestDistanceSq = DistanceSq;
+			BestTarget = HitPawn;
+		}
+	}
+
+	if (BestTarget)
+	{
+		const float ClampedEnemyMaxHealth = FMath::Max(1.0f, EnemyMaxHealth);
+		const TWeakObjectPtr<AActor> TargetKey(BestTarget);
+		float& TargetHealth = GEnemyHealthByActor.FindOrAdd(TargetKey, ClampedEnemyMaxHealth);
+		TargetHealth = FMath::Clamp(TargetHealth - AttackDamage, 0.0f, ClampedEnemyMaxHealth);
+
+		UE_LOG(LogSoul_and_dungeon, Log, TEXT("Kino hit %s for %.1f damage (%.1f / %.1f HP)."), *GetNameSafe(BestTarget), AttackDamage, TargetHealth, ClampedEnemyMaxHealth);
+
+		if (TargetHealth <= 0.0f)
+		{
+			KillEnemyActor(BestTarget, GetActorForwardVector());
+		}
+	}
+}
+
+void ASoul_and_dungeonCharacter::FinishAttack()
+{
+	bIsAttacking = false;
 }
 
 

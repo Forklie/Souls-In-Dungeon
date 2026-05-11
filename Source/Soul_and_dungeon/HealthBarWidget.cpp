@@ -99,7 +99,9 @@ void UHealthBarWidget::CreateWidgetHierarchy()
 	// 5. Chest Counter (Top Left)
 	ChestCounterText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("ChestCounterText"));
 	ChestCounterText->SetText(FText::FromString("CHESTS 0 / 0"));
-	ChestCounterText->Font.Size = 14;
+	FSlateFontInfo ChestFont = ChestCounterText->GetFont();
+	ChestFont.Size = 14;
+	ChestCounterText->SetFont(ChestFont);
 	ChestCounterText->SetColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.85f, 0.2f, 1.0f)));
 	
 	UCanvasPanelSlot* ChestSlot = MainCanvas->AddChildToCanvas(ChestCounterText);
@@ -147,7 +149,9 @@ void UHealthBarWidget::CreateWidgetHierarchy()
 	// 10. HP Value Text (Bottom Right)
 	HealthValueText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("HealthValueText"));
 	HealthValueText->SetText(FText::FromString("HP 100 / 100"));
-	HealthValueText->Font.Size = 18;
+	FSlateFontInfo HealthFont = HealthValueText->GetFont();
+	HealthFont.Size = 18;
+	HealthValueText->SetFont(HealthFont);
 	HealthValueText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
 	
 	UCanvasPanelSlot* ValueSlot = MainCanvas->AddChildToCanvas(HealthValueText);
