@@ -430,13 +430,13 @@ void UMinimapWidget::UpdateCompass()
 	float Radius = ContainerSize * 0.42f;
 	float YawRad = FMath::DegreesToRadians(-CameraYaw);
 
-	auto PlaceCompass = [&](UCanvasPanelSlot* Slot, float WorldAngleDeg)
+	auto PlaceCompass = [&](UCanvasPanelSlot* CompassSlot, float WorldAngleDeg)
 	{
-		if (!Slot) return;
+		if (!CompassSlot) return;
 		float AngleRad = FMath::DegreesToRadians(WorldAngleDeg) + YawRad;
 		float X = FMath::Sin(AngleRad) * Radius;
 		float Y = -FMath::Cos(AngleRad) * Radius;
-		Slot->SetPosition(FVector2D(X, Y));
+		CompassSlot->SetPosition(FVector2D(X, Y));
 	};
 
 	PlaceCompass(CompassNSlot, 0.0f);
