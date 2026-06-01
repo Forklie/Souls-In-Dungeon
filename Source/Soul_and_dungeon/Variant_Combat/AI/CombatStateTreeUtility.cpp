@@ -9,8 +9,27 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "AIController.h"
 #include "CombatEnemy.h"
+#include "LevelManager.h"
 #include "Kismet/GameplayStatics.h"
 #include "StateTreeAsyncExecutionContext.h"
+
+namespace
+{
+	bool IsObjectiveComplete(const ACombatEnemy* Enemy)
+	{
+		if (!Enemy || !Enemy->GetWorld())
+		{
+			return false;
+		}
+
+		if (ALevelManager* LevelManager = ALevelManager::GetActiveLevelManager(Enemy))
+		{
+			return LevelManager->IsObjectiveComplete();
+		}
+
+		return false;
+	}
+}
 
 bool FStateTreeCharacterGroundedCondition::TestCondition(FStateTreeExecutionContext& Context) const
 {
@@ -73,6 +92,11 @@ EStateTreeRunStatus FStateTreeComboAttackTask::EnterState(FStateTreeExecutionCon
 		// get the instance data
 		FInstanceDataType& InstanceData = Context.GetInstanceData(*this);
 
+		if (IsObjectiveComplete(InstanceData.Character))
+		{
+			return EStateTreeRunStatus::Succeeded;
+		}
+
 		// bind to the on attack completed delegate
 		InstanceData.Character->OnAttackCompleted.BindLambda(
 			[WeakContext = Context.MakeWeakExecutionContext()]()
@@ -118,6 +142,11 @@ EStateTreeRunStatus FStateTreeChargedAttackTask::EnterState(FStateTreeExecutionC
 	{
 		// get the instance data
 		FInstanceDataType& InstanceData = Context.GetInstanceData(*this);
+
+		if (IsObjectiveComplete(InstanceData.Character))
+		{
+			return EStateTreeRunStatus::Succeeded;
+		}
 
 		// bind to the on attack completed delegate
 		InstanceData.Character->OnAttackCompleted.BindLambda(

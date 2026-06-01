@@ -3,9 +3,14 @@
 #include "Soul_and_dungeonCharacter.h"
 #include "Engine/LocalPlayer.h"
 #include "Camera/CameraComponent.h"
+#include "Components/ActorComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/SceneComponent.h"
+#include "Components/SceneCaptureComponent2D.h"
+#include "Engine/TextureRenderTarget2D.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "Kismet/GameplayStatics.h"
 #include "GameFramework/Controller.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
@@ -13,6 +18,30 @@
 #include "Soul_and_dungeon.h"
 #include "Kismet/GameplayStatics.h"
 #include "Blueprint/UserWidget.h"
+#include "InteractPromptWidget.h"
+#include "HealthBarWidget.h"
+#include "MinimapWidget.h"
+#include "MinimapDataProvider.h"
+#include "DungeonGenerator.h"
+#include "LevelManager.h"
+#include "TimerManager.h"
+#include "Animation/AnimMontage.h"
+#include "Animation/AnimInstance.h"
+#include "SecondarySearchSolver.h"
+#include "HAL/IConsoleManager.h"
+
+namespace
+{
+	bool NameLooksLikeDoor(const FString& Name)
+	{
+		return Name.Contains(TEXT("BP_COMP_Door_Interactive_Large"), ESearchCase::IgnoreCase);
+	}
+
+	bool NameLooksLikeChest(const FString& Name)
+	{
+		return Name.Contains(TEXT("BP_PROP_chest_Interactive"), ESearchCase::IgnoreCase);
+	}
+}
 
 ASoul_and_dungeonCharacter::ASoul_and_dungeonCharacter()
 {
@@ -50,6 +79,95 @@ ASoul_and_dungeonCharacter::ASoul_and_dungeonCharacter()
 
 	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
 	// are set in the derived blueprint asset named ThirdPersonCharacter (to avoid direct content references in C++)
+
+	// 🗺️ MINIMAP — Top-down scene capture for the minimap texture.
+	// Uses a plain USceneComponent (NOT a spring arm) because USpringArmComponent
+	// has its own PostPhysics tick that recomputes rotation from the parent,
+	// overriding any SetWorldRotation calls we make in the character tick.
+	// bAbsoluteRotation = true ensures it ignores the character's rotation entirely.
+	MinimapBoom = CreateDefaultSubobject<USceneComponent>(TEXT("MinimapBoom"));
+	MinimapBoom->SetupAttachment(RootComponent);
+	MinimapBoom->SetRelativeLocation(FVector(0.0f, 0.0f, 3000.0f));
+	MinimapBoom->SetRelativeRotation(FRotator(-90.0f, 0.0f, 0.0f));
+	MinimapBoom->SetAbsolute(false, true, false); // bAbsoluteRotation = true
+
+	MinimapCapture = CreateDefaultSubobject<USceneCaptureComponent2D>(TEXT("MinimapCapture"));
+	MinimapCapture->SetupAttachment(MinimapBoom);
+	MinimapCapture->ProjectionType = ECameraProjectionMode::Orthographic;
+	MinimapCapture->OrthoWidth = MinimapWorldRadius * 2.0f;
+	MinimapCapture->CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
+	MinimapCapture->bCaptureEveryFrame = false; // We manually capture for performance
+	MinimapCapture->bCaptureOnMovement = false;
+	MinimapCapture->bAlwaysPersistRenderingState = true;
+	MinimapCapture->MaxViewDistanceOverride = 5000.0f;
+
+	// Optimized show flags for clean map rendering
+	MinimapCapture->ShowFlags.SetFog(false);
+	MinimapCapture->ShowFlags.SetVolumetricFog(false);
+	MinimapCapture->ShowFlags.SetAtmosphere(false);
+	MinimapCapture->ShowFlags.SetBloom(false);
+	MinimapCapture->ShowFlags.SetMotionBlur(false);
+	MinimapCapture->ShowFlags.SetSkyLighting(false);
+	MinimapCapture->ShowFlags.SetDynamicShadows(false);
+	MinimapCapture->ShowFlags.SetParticles(false);
+	MinimapCapture->ShowFlags.SetDecals(true);
+	MinimapCapture->ShowFlags.SetPostProcessing(false);
+	MinimapCapture->ShowFlags.SetAntiAliasing(false);
+	MinimapCapture->ShowFlags.SetTemporalAA(false);
+	MinimapCapture->ShowFlags.SetEyeAdaptation(false);
+	MinimapCapture->ShowFlags.SetScreenSpaceReflections(false);
+	MinimapCapture->ShowFlags.SetAmbientOcclusion(false);
+
+	PrimaryActorTick.bCanEverTick = true; // Make sure tick is enabled
+	Health = MaxHealth;
+}
+
+void ASoul_and_dungeonCharacter::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+
+		EnsurePlayerHudWidgets();
+
+	TraceForInteractables();
+
+	// Smoothly blend hit reaction overlay weight toward target
+	if (!FMath::IsNearlyEqual(HitReactionOverlayWeight, HitReactionOverlayWeightTarget, 0.001f))
+	{
+		const float BlendSpeed = (HitReactionOverlayWeightTarget > HitReactionOverlayWeight)
+			? HitReactionBlendInSpeed
+			: HitReactionBlendOutSpeed;
+		HitReactionOverlayWeight = FMath::FInterpTo(HitReactionOverlayWeight, HitReactionOverlayWeightTarget, DeltaTime, BlendSpeed);
+	}
+	else
+	{
+		HitReactionOverlayWeight = HitReactionOverlayWeightTarget;
+	}
+
+	// Update minimap player marker + scene capture
+	if (MinimapWidget)
+	{
+		// Pass character rotation for the arrow, and control rotation (mouse/camera) for map alignment
+		MinimapWidget->UpdatePlayerState(GetActorLocation(), GetActorRotation().Yaw, GetControlRotation().Yaw);
+	}
+
+	// Throttle minimap scene capture to ~10fps for performance
+	if (MinimapCapture && MinimapCapture->TextureTarget)
+	{
+		MinimapCaptureTimer += DeltaTime;
+		if (MinimapCaptureTimer >= MinimapCaptureInterval)
+		{
+			MinimapCaptureTimer = 0.0f;
+
+			// Update height above player (position still follows character via attachment,
+			// but rotation is completely independent due to bAbsoluteRotation = true)
+			MinimapBoom->SetRelativeLocation(FVector(0.0f, 0.0f, MinimapCaptureHeight));
+
+			// Update ortho width in case it changed
+			MinimapCapture->OrthoWidth = MinimapWorldRadius * 2.0f;
+
+			MinimapCapture->CaptureScene();
+		}
+	}
 }
 
 void ASoul_and_dungeonCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -67,6 +185,16 @@ void ASoul_and_dungeonCharacter::SetupPlayerInputComponent(UInputComponent* Play
 
 		// Looking
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &ASoul_and_dungeonCharacter::Look);
+
+		if (InteractAction)
+		{
+			EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Started, this, &ASoul_and_dungeonCharacter::DoInteract);
+		}
+
+
+
+		// 🧠 DEBUG TOGGLE: 'M' for Algorithm Cycle
+		PlayerInputComponent->BindKey(EKeys::M, IE_Pressed, this, &ASoul_and_dungeonCharacter::CycleSearchAlgorithm);
 	}
 	else
 	{
@@ -136,43 +264,619 @@ void ASoul_and_dungeonCharacter::DoJumpEnd()
 
 
 
-void ASoul_and_dungeonCharacter::TakeDamageSimple(float DamageAmount)
+float ASoul_and_dungeonCharacter::TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, class AController* EventInstigator, AActor* DamageCauser)
 {
-	Health -= DamageAmount;
+	if (bIsDead) return 0.0f;
 
-	if (GEngine)
+	float ActualDamage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
+	
+	if (ActualDamage > 0.0f)
 	{
-		GEngine->AddOnScreenDebugMessage(
-			-1,
-			2.0f,
-			FColor::Red,
-			FString::Printf(TEXT("Player Hit! Health: %f"), Health)
-		);
-	}
+		Health = FMath::Clamp(Health - ActualDamage, 0.0f, MaxHealth);
 
-	// 💀 PLAYER DEAD
-	if (Health <= 0)
-	{
-		if (GEngine)
+		// 🎬 Trigger hit reaction overlay
+		StartBackHitReaction();
+
+		UpdateHealthBarWidget();
+
+		// 💀 PLAYER DEAD
+		if (Health <= 0 && !bIsDead)
 		{
-			GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Red, TEXT("Player Dead"));
+			bIsDead = true;
+			PlayDeathSequence();
 		}
-
-		// 🔄 RESTART LEVEL
-		UGameplayStatics::OpenLevel(this, FName(*GetWorld()->GetName()));
 	}
+
+	return ActualDamage;
 }
 
 void ASoul_and_dungeonCharacter::BeginPlay()
 {
+	// Call the base class  
 	Super::BeginPlay();
 
-	if (UClass* WidgetClass = LoadClass<UUserWidget>(nullptr, TEXT("/Game/ThirdPerson/UI/WBP_HealthBar.WBP_HealthBar_C")))
+	if (MaxHealth < 1.0f)
 	{
-		UUserWidget* Widget = CreateWidget<UUserWidget>(GetWorld(), WidgetClass);
-		if (Widget)
+		MaxHealth = 100.0f;
+	}
+
+	if (Health <= 0.0f || Health > MaxHealth)
+	{
+		Health = MaxHealth;
+	}
+
+	EnsurePlayerHudWidgets();
+	UpdateHealthBarWidget();
+	UpdateChestCounterWidget();
+
+	// Create minimap render target at runtime
+	if (!MinimapRenderTarget)
+	{
+		MinimapRenderTarget = NewObject<UTextureRenderTarget2D>(this, TEXT("MinimapRT"));
+		// Set clear color to match the MinimapWidget BgColor so the void blends seamlessly
+		MinimapRenderTarget->ClearColor = FLinearColor(0.005f, 0.005f, 0.015f, 1.0f);
+		MinimapRenderTarget->InitAutoFormat(512, 512);
+		MinimapRenderTarget->UpdateResourceImmediate();
+
+		if (MinimapCapture)
 		{
-			Widget->AddToViewport();
+			MinimapCapture->TextureTarget = MinimapRenderTarget;
+
+			// Hide the player pawn from the minimap camera
+			MinimapCapture->HiddenActors.Add(this);
+
+			UE_LOG(LogSoul_and_dungeon, Log, TEXT("Minimap: RenderTarget 512x512 created and assigned to SceneCapture."));
 		}
 	}
+
+	// Feed the render target to the minimap widget
+	if (MinimapWidget && MinimapRenderTarget)
+	{
+		MinimapWidget->SetRenderTarget(MinimapRenderTarget);
+	}
+}
+
+void ASoul_and_dungeonCharacter::EnsurePlayerHudWidgets()
+{
+	APlayerController* PlayerController = Cast<APlayerController>(GetController());
+	if (!PlayerController && GetWorld())
+	{
+		PlayerController = GetWorld()->GetFirstPlayerController();
+	}
+
+	if (!PlayerController || !PlayerController->IsLocalController())
+	{
+		return;
+	}
+
+	if (!InteractPromptWidget)
+	{
+		InteractPromptWidget = CreateWidget<UInteractPromptWidget>(PlayerController, UInteractPromptWidget::StaticClass());
+		if (InteractPromptWidget)
+		{
+			InteractPromptWidget->AddToViewport(10);
+			InteractPromptWidget->SetVisibility(ESlateVisibility::Collapsed);
+		}
+	}
+
+	if (!HealthBarWidget)
+	{
+		// Always create our new premium C++ HealthBarWidget
+		HealthBarWidget = CreateWidget<UHealthBarWidget>(PlayerController, UHealthBarWidget::StaticClass());
+		if (HealthBarWidget)
+			{
+				HealthBarWidget->AddToViewport(50);
+				HealthBarWidget->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+
+			UE_LOG(LogSoul_and_dungeon, Log, TEXT("Redesigned Health Bar Initialized at bottom-left."));
+		}
+	}
+
+	if (HealthBarWidget)
+	{
+		UpdateHealthBarWidget();
+		UpdateChestCounterWidget();
+	}
+
+	// Minimap Widget (bottom-right proximity radar)
+	if (!MinimapWidget)
+	{
+		MinimapWidget = CreateWidget<UMinimapWidget>(PlayerController, UMinimapWidget::StaticClass());
+		if (MinimapWidget)
+		{
+			MinimapWidget->AddToViewport(40);
+			MinimapWidget->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+
+			bool bFoundGenerator = false;
+
+			// Strategy 1: DungeonGenerator provides data
+			if (GetWorld())
+			{
+				TArray<AActor*> DungeonGenerators;
+				UGameplayStatics::GetAllActorsOfClass(GetWorld(), ADungeonGenerator::StaticClass(), DungeonGenerators);
+				for (AActor* DG : DungeonGenerators)
+				{
+					ADungeonGenerator* Generator = Cast<ADungeonGenerator>(DG);
+					if (Generator && Generator->MinimapData && Generator->MinimapData->HasData())
+					{
+						MinimapWidget->SetDataProvider(Generator->MinimapData);
+						bFoundGenerator = true;
+						break;
+					}
+				}
+			}
+
+			// Strategy 2: Auto-scan world for chests/enemies (radar doesn't need room geometry)
+			if (!bFoundGenerator && GetWorld())
+			{
+				UMinimapDataProvider* AutoScanData = NewObject<UMinimapDataProvider>(this);
+
+				TArray<AActor*> AllActors;
+				UGameplayStatics::GetAllActorsOfClass(GetWorld(), AActor::StaticClass(), AllActors);
+
+				// Register a dummy room at world origin so HasData() returns true
+				AutoScanData->RegisterRoomDirect(FVector::ZeroVector, FVector(5000, 5000, 500), false, true, false);
+
+				for (AActor* Actor : AllActors)
+				{
+					if (!Actor) continue;
+					FString ActorName = Actor->GetClass()->GetName();
+
+					// Chests
+					if (IsChestActor(Actor))
+					{
+						AutoScanData->RegisterIcon(Actor, EMinimapIconType::Chest);
+					}
+					// Enemies
+					else if (ActorName.Contains(TEXT("Skeleton"), ESearchCase::IgnoreCase) ||
+						ActorName.Contains(TEXT("Enemy"), ESearchCase::IgnoreCase))
+					{
+						AutoScanData->RegisterIcon(Actor, EMinimapIconType::Enemy);
+					}
+				}
+
+				MinimapWidget->SetDataProvider(AutoScanData);
+				UE_LOG(LogSoul_and_dungeon, Log, TEXT("MinimapWidget: Auto-scan radar — %d icons registered"),
+					AutoScanData->GetIcons().Num());
+			}
+
+			UE_LOG(LogSoul_and_dungeon, Log, TEXT("Minimap radar initialized."));
+		}
+	}
+}
+
+void ASoul_and_dungeonCharacter::UpdateHealthBarWidget()
+{
+	if (HealthBarWidget)
+	{
+		HealthBarWidget->SetHealthState(Health, MaxHealth);
+	}
+}
+
+ALevelManager* ASoul_and_dungeonCharacter::GetLevelManager() const
+{
+	if (ALevelManager* ActiveManager = ALevelManager::GetActiveLevelManager(this))
+	{
+		CachedLevelManager = ActiveManager;
+		return ActiveManager;
+	}
+
+	if (CachedLevelManager.IsValid())
+	{
+		return CachedLevelManager.Get();
+	}
+
+	if (!GetWorld())
+	{
+		return nullptr;
+	}
+
+	// If missing (like in test maps), spawn one to handle objective logic.
+	if (!CachedLevelManager.IsValid())
+	{
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		CachedLevelManager = GetWorld()->SpawnActor<ALevelManager>(ALevelManager::StaticClass(), FTransform::Identity, SpawnParams);
+
+		if (CachedLevelManager.IsValid())
+		{
+			UE_LOG(LogSoul_and_dungeon, Log, TEXT("GetLevelManager: No manager found. Spawned new ALevelManager to track objectives."));
+		}
+	}
+
+	return CachedLevelManager.Get();
+}
+
+void ASoul_and_dungeonCharacter::UpdateChestCounterWidget()
+{
+	if (!HealthBarWidget || !GetWorld())
+	{
+		return;
+	}
+
+	// 🚀 OPTIMIZATION: Throttling updates to every ~300ms instead of every single frame (Tick).
+	// For visual progress tracking like this, high-frequency polling is unnecessary.
+	float CurrentTime = GetWorld()->GetTimeSeconds();
+	if (CurrentTime - LastChestUpdateTime < ChestUpdateInterval)
+	{
+		return;
+	}
+	LastChestUpdateTime = CurrentTime;
+
+	ALevelManager* LevelManager = GetLevelManager();
+	if (LevelManager)
+	{
+		// 🛠 ROBUST POLLING: Instead of relying on events, we check the actual visual state of chests in the world.
+		// This handles cases where the Blueprint doesn't notify the manager correctly.
+		int32 VisualOpenCount = LevelManager->GetOpenChestCount();
+
+		// Synchronize the internal count and completion state just in case
+		LevelManager->SyncObjectiveStateFromVisualCount(VisualOpenCount);
+
+		HealthBarWidget->SetChestCounter(LevelManager->OpenedChests, LevelManager->TotalRequiredChests);
+
+		// Sync minimap chest states
+		if (MinimapWidget)
+		{
+			MinimapWidget->RefreshChestStates(LevelManager);
+		}
+	}
+	else
+	{
+		HealthBarWidget->SetChestCounter(0, 0);
+	}
+}
+
+void ASoul_and_dungeonCharacter::TraceForInteractables()
+{
+	if (!FollowCamera) return;
+
+	FVector TraceStart = FollowCamera->GetComponentLocation();
+	FVector TraceEnd = TraceStart + (FollowCamera->GetForwardVector() * InteractTraceDistance);
+
+	FHitResult HitResult;
+	FCollisionQueryParams QueryParams;
+	QueryParams.AddIgnoredActor(this);
+
+	// Use SphereTrace for smoother, more forgiving detection
+	const float SphereRadius = 25.0f;
+	bool bHit = GetWorld()->SweepSingleByChannel(
+		HitResult,
+		TraceStart,
+		TraceEnd,
+		FQuat::Identity,
+		ECC_Visibility,
+		FCollisionShape::MakeSphere(SphereRadius),
+		QueryParams
+	);
+
+	AActor* HitActor = bHit ? HitResult.GetActor() : nullptr;
+
+	if (HitActor && !IsInteractableActor(HitActor))
+	{
+		HitActor = nullptr;
+	}
+	else if (HitActor && IsChestActor(HitActor) && IsChestOpen(HitActor))
+	{
+		HitActor = nullptr;
+	}
+
+	// Only update when the target changes
+	if (HitActor != CurrentInteractable)
+	{
+		// Remove highlight from the old target
+		if (CurrentInteractable)
+		{
+			TArray<UPrimitiveComponent*> Comps;
+			CurrentInteractable->GetComponents(Comps);
+			for (UPrimitiveComponent* Comp : Comps)
+			{
+				Comp->SetRenderCustomDepth(false);
+				Comp->MarkRenderStateDirty();
+			}
+		}
+
+		CurrentInteractable = HitActor;
+
+		// Add highlight + show prompt for the new target
+		if (CurrentInteractable)
+		{
+			TArray<UPrimitiveComponent*> Comps;
+			CurrentInteractable->GetComponents(Comps);
+			for (UPrimitiveComponent* Comp : Comps)
+			{
+				Comp->SetRenderCustomDepth(true);
+				Comp->SetCustomDepthStencilValue(1);
+				Comp->MarkRenderStateDirty();
+			}
+
+			if (InteractPromptWidget)
+			{
+				InteractPromptWidget->SetPromptText(GetInteractPromptText(CurrentInteractable));
+				InteractPromptWidget->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+			}
+		}
+		else
+		{
+			if (InteractPromptWidget)
+			{
+				InteractPromptWidget->SetVisibility(ESlateVisibility::Collapsed);
+			}
+		}
+	}
+
+	// Every tick: update the widget position to track the object in 3D
+	if (CurrentInteractable && InteractPromptWidget && InteractPromptWidget->GetVisibility() != ESlateVisibility::Collapsed)
+	{
+		// Get the object's bounding box to determine a good anchor point
+		FVector Origin, BoxExtent;
+		CurrentInteractable->GetActorBounds(false, Origin, BoxExtent);
+		
+		FVector PromptWorldPos;
+		if (BoxExtent.Z > 80.0f) // Tall object like a door
+		{
+			// Use actor location (usually at the base) and add 170cm (standard head height)
+			PromptWorldPos = CurrentInteractable->GetActorLocation();
+			PromptWorldPos.Z += 170.0f; 
+		}
+		else // Short object like a chest
+		{
+			PromptWorldPos = Origin + FVector(0, 0, BoxExtent.Z + 15.0f);
+		}
+
+		APlayerController* PC = Cast<APlayerController>(GetController());
+		if (PC)
+		{
+			InteractPromptWidget->UpdateWorldPosition(PC, PromptWorldPos);
+		}
+	}
+}
+
+void ASoul_and_dungeonCharacter::DoInteract()
+{
+	if (CurrentInteractable)
+	{
+		// Identify if this is a chest before interacting
+		bool bIsChest = IsChestActor(CurrentInteractable);
+
+		// Try to call the Interact function (from Interact_BPI or any blueprint)
+		UFunction* InteractFunc = CurrentInteractable->FindFunction(FName("Interact"));
+		if (InteractFunc)
+		{
+			uint8* Buffer = (uint8*)FMemory_Alloca(InteractFunc->ParmsSize);
+			FMemory::Memzero(Buffer, InteractFunc->ParmsSize);
+			CurrentInteractable->ProcessEvent(InteractFunc, Buffer);
+			
+			// C++ Fallback: If the Blueprint doesn't notify the LevelManager, we do it here.
+			// LevelManager::NotifyChestOpened has its own internal check to prevent double-counting.
+			if (bIsChest)
+			{
+				if (ALevelManager* LM = GetLevelManager())
+				{
+					LM->NotifyChestOpened(CurrentInteractable);
+					UpdateChestCounterWidget();
+				}
+			}
+
+			if (GEngine)
+			{
+				GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Green, TEXT("Interacted with object!"));
+			}
+		}
+	}
+}
+
+bool ASoul_and_dungeonCharacter::IsInteractableActor(AActor* Actor) const
+{
+	if (!Actor)
+	{
+		return false;
+	}
+
+	if (Actor->ActorHasTag(FName("Interactable")))
+	{
+		return true;
+	}
+
+	if (Actor->GetClass()->FindFunctionByName(FName("Interact")))
+	{
+		return true;
+	}
+
+	for (const FImplementedInterface& Interface : Actor->GetClass()->Interfaces)
+	{
+		if (Interface.Class && Interface.Class->GetName().Contains(TEXT("Interact"), ESearchCase::IgnoreCase))
+		{
+			return true;
+		}
+	}
+
+	return IsDoorActor(Actor);
+}
+
+bool ASoul_and_dungeonCharacter::IsDoorActor(AActor* Actor) const
+{
+	if (!Actor)
+	{
+		return false;
+	}
+
+	if (NameLooksLikeDoor(Actor->GetName()) ||
+		NameLooksLikeDoor(Actor->GetClass()->GetName()))
+	{
+		return true;
+	}
+
+	TArray<UActorComponent*> Components;
+	Actor->GetComponents(Components);
+	for (const UActorComponent* Component : Components)
+	{
+		if (Component && NameLooksLikeDoor(Component->GetName()))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+bool ASoul_and_dungeonCharacter::IsChestActor(AActor* Actor) const
+{
+	if (!Actor)
+	{
+		return false;
+	}
+
+	if (NameLooksLikeChest(Actor->GetName()) ||
+		NameLooksLikeChest(Actor->GetClass()->GetName()))
+	{
+		return true;
+	}
+
+	TArray<UActorComponent*> Components;
+	Actor->GetComponents(Components);
+	for (const UActorComponent* Component : Components)
+	{
+		if (Component && NameLooksLikeChest(Component->GetName()))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+bool ASoul_and_dungeonCharacter::IsChestOpen(AActor* Actor) const
+{
+	if (!Actor)
+	{
+		return false;
+	}
+
+	TArray<USceneComponent*> SceneComponents;
+	Actor->GetComponents(SceneComponents);
+	for (const USceneComponent* Component : SceneComponents)
+	{
+		if (!Component || !NameLooksLikeChest(Component->GetName()) || !Component->GetName().Contains(TEXT("top"), ESearchCase::IgnoreCase))
+		{
+			continue;
+		}
+
+		const FRotator RelativeRotation = Component->GetRelativeRotation();
+		return FMath::Abs(RelativeRotation.Roll) > 5.0f ||
+			FMath::Abs(RelativeRotation.Pitch) > 5.0f ||
+			FMath::Abs(RelativeRotation.Yaw) > 5.0f;
+	}
+
+	return false;
+}
+
+FString ASoul_and_dungeonCharacter::GetInteractPromptText(AActor* Actor) const
+{
+	return IsDoorActor(Actor)
+		? FString(TEXT("Press  [ E ]  to Open Door"))
+		: FString(TEXT("Press  [ E ]  to Interact"));
+}
+
+void ASoul_and_dungeonCharacter::StartBackHitReaction()
+{
+	// Per AGENTS.md KI: only set the target, don't force current weight to 1.0
+	// This ensures the blend-in is smooth rather than snapping
+	HitReactionOverlayWeightTarget = 1.0f;
+	bHitReactionOverlay = true;
+
+	// Play a random hit sound (SC_Kino_Hit SoundCue) at the character's location
+	if (HitSound)
+	{
+		UGameplayStatics::PlaySoundAtLocation(this, HitSound, GetActorLocation());
+	}
+
+	// Clear any existing timer so repeated hits restart the duration
+	GetWorld()->GetTimerManager().ClearTimer(HitReactionTimerHandle);
+
+	// After HitReactionDuration, begin the blend-out
+	GetWorld()->GetTimerManager().SetTimer(
+		HitReactionTimerHandle,
+		this,
+		&ASoul_and_dungeonCharacter::OnHitReactionFinished,
+		HitReactionDuration,
+		false
+	);
+}
+
+void ASoul_and_dungeonCharacter::OnHitReactionFinished()
+{
+	// Begin blend-out: Tick will smoothly interpolate weight back to 0
+	HitReactionOverlayWeightTarget = 0.0f;
+	bHitReactionOverlay = false;
+}
+
+
+
+void ASoul_and_dungeonCharacter::PlayDeathSequence()
+{
+	// Disable player input
+	if (APlayerController* PC = Cast<APlayerController>(GetController()))
+	{
+		DisableInput(PC);
+	}
+
+	// Stop any movement
+	GetCharacterMovement()->StopMovementImmediately();
+
+	// Disable collision so the corpse doesn't block anything
+	GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+	// Play death sound
+	if (DeathSound)
+	{
+		UGameplayStatics::PlaySoundAtLocation(this, DeathSound, GetActorLocation(), 1.0f, 1.0f, DeathSoundStartTime);
+	}
+
+	// Play the death montage (visual only — UI is on a fixed timer below)
+	if (DeathMontage)
+	{
+		UAnimInstance* AnimInst = GetMesh()->GetAnimInstance();
+		if (AnimInst)
+		{
+			AnimInst->Montage_Play(DeathMontage, 1.0f);
+		}
+	}
+
+	// Always show the death screen after 5 seconds, regardless of montage state
+	GetWorld()->GetTimerManager().SetTimer(DeathUITimerHandle, this,
+		&ASoul_and_dungeonCharacter::OnDeathMontageEnded, 5.0f, false);
+}
+
+void ASoul_and_dungeonCharacter::OnDeathMontageEnded()
+{
+	UE_LOG(LogSoul_and_dungeon, Log, TEXT("OnDeathMontageEnded: Showing death screen"));
+
+	// Show the "YOU DIED" restart screen
+	if (UClass* DeathWidgetClass = LoadClass<UUserWidget>(nullptr, TEXT("/Game/ThirdPerson/UI/WBP_DeathScreen.WBP_DeathScreen_C")))
+	{
+		APlayerController* PC = Cast<APlayerController>(GetController());
+		if (PC)
+		{
+			UUserWidget* DeathWidget = CreateWidget<UUserWidget>(PC, DeathWidgetClass);
+			if (DeathWidget)
+			{
+				DeathWidget->AddToViewport(100);
+			}
+
+			// Show mouse cursor and set UI input mode
+			PC->bShowMouseCursor = true;
+			FInputModeUIOnly UIMode;
+			if (DeathWidget)
+			{
+				UIMode.SetWidgetToFocus(DeathWidget->TakeWidget());
+			}
+			PC->SetInputMode(UIMode);
+		}
+	}
+}
+
+void ASoul_and_dungeonCharacter::CycleSearchAlgorithm()
+{
+	FSecondarySearchDebug::CycleMode();
 }
