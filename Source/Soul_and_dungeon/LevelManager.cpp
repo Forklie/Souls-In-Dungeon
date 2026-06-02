@@ -1,5 +1,6 @@
 #include "LevelManager.h"
 #include "DungeonChestActor.h"
+#include "DungeonProgressionState.h"
 #include "EngineUtils.h"
 #include "Components/SceneComponent.h"
 #include "Kismet/KismetSystemLibrary.h"
@@ -370,6 +371,29 @@ void ALevelManager::CheckObjectiveComplete()
 	{
 		bObjectivesComplete = true;
 		UE_LOG(LogTemp, Log, TEXT("LevelManager: All objectives complete! Unlocking portal."));
+
+		if (bCompleteGameWhenObjectivesComplete)
+		{
+			UE_LOG(LogTemp, Log, TEXT("LevelManager: Objective completion is configured to complete the game immediately."));
+
+			ADungeonProgressionState* Progression = ADungeonProgressionState::Get(this);
+			if (!Progression && GetWorld())
+			{
+				FActorSpawnParameters SpawnParams;
+				SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+				Progression = GetWorld()->SpawnActor<ADungeonProgressionState>(ADungeonProgressionState::StaticClass(), FTransform::Identity, SpawnParams);
+			}
+
+			if (Progression)
+			{
+				Progression->CompleteGame();
+			}
+			else
+			{
+				UKismetSystemLibrary::PrintString(this, TEXT("ALL CHESTS OPENED! LEVEL COMPLETE!"), true, true, FLinearColor::Green, 10.0f);
+			}
+			return;
+		}
 		
 		// Optional: Screen message
 		UKismetSystemLibrary::PrintString(this, TEXT("ALL CHESTS OPENED! PORTAL UNLOCKED!"), true, true, FLinearColor::Green, 10.0f);

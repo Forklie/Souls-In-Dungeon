@@ -31,6 +31,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Objectives")
 	AActor* ExitPortalRef = nullptr;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Objectives")
+	bool bCompleteGameWhenObjectivesComplete = false;
+
 	/** Called by objective actors (like chests) when completed */
 	UFUNCTION(BlueprintCallable, Category = "Objectives")
 	void NotifyChestOpened(AActor* ChestActor = nullptr);
@@ -62,6 +65,9 @@ public:
 	/** Syncs objective state from the observed open chest count. */
 	UFUNCTION(BlueprintCallable, Category = "Objectives")
 	void SyncObjectiveStateFromVisualCount(int32 VisualOpenCount);
+
+	UFUNCTION(BlueprintCallable, Category = "Objectives")
+	void SetCompleteGameWhenObjectivesComplete(bool bShouldCompleteGame) { bCompleteGameWhenObjectivesComplete = bShouldCompleteGame; }
 
 private:
 	struct FCachedChest

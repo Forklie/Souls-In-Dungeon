@@ -89,7 +89,7 @@ void ASecondarySearchVisualizerActor::BeginPlay()
 	GoalMaterial = CreateColorMaterial(BaseMaterial, FLinearColor(1.0f, 0.95f, 0.05f, 1.0f), TEXT("GoalMaterial"));
 	TargetMaterial = CreateColorMaterial(BaseMaterial, FLinearColor(0.5f, 0.5f, 0.5f, 1.0f), TEXT("TargetMaterial"));
 	PathMaterial = CreateColorMaterial(PathBaseMaterial, FLinearColor(0.08f, 0.45f, 0.95f, 0.32f), TEXT("PathMaterial"));
-	PreviewPathMaterial = CreateColorMaterial(PathBaseMaterial, FLinearColor(0.1f, 1.0f, 0.2f, 1.0f), TEXT("PreviewPathMaterial"));
+	PreviewPathMaterial = CreateColorMaterial(PathBaseMaterial, FLinearColor(0.0f, 1.0f, 0.15f, 1.0f), TEXT("PreviewPathMaterial"));
 	BFSMaterial = CreateColorMaterial(PathBaseMaterial, FLinearColor(1.0f, 0.0f, 1.0f, 0.6f), TEXT("BFSMaterial"));
 	UCSMaterial = CreateColorMaterial(PathBaseMaterial, FLinearColor(1.0f, 1.0f, 0.0f, 0.6f), TEXT("UCSMaterial"));
 	AStarMaterial = CreateColorMaterial(PathBaseMaterial, FLinearColor(0.0f, 1.0f, 1.0f, 0.6f), TEXT("AStarMaterial"));
@@ -175,6 +175,7 @@ void ASecondarySearchVisualizerActor::UpdateVisualization(
 	CachedNodeSoftness = FMath::Clamp(NodeSoftness, 0.1f, 1.0f);
 	CachedTargetSmoothing = FMath::Clamp(TargetSmoothing, 1.0f, 40.0f);
 	CachedTargetZOffset = Settings.DebugPointZOffset;
+	CachedPathTubeRadius = Settings.PathTubeRadius;
 	CachedVisualQuality = ESecondarySearchVisualQuality::High;
 	bCachedLastPathFallback = bLastPathFallback;
 
@@ -858,7 +859,7 @@ void ASecondarySearchVisualizerActor::UpdatePathLayers(float DeltaSeconds, float
 			const float WakeWindow = WaveWindow * 2.8f;
 
 			// --- Update materials ---
-			const FLinearColor PathColor = Layer.bPreview ? FLinearColor(0.1f, 1.0f, 0.2f, 1.0f) : FLinearColor(0.08f, 0.45f, 0.95f, 1.0f);
+			const FLinearColor PathColor = Layer.bPreview ? FLinearColor(0.0f, 1.0f, 0.15f, 1.0f) : FLinearColor(0.08f, 0.45f, 0.95f, 1.0f);
 
 		// --- Compute the peak crest glow across the whole layer (used for shared BaseMaterial) ---
 		float PeakCrestGlow = 0.0f;
@@ -873,13 +874,13 @@ void ASecondarySearchVisualizerActor::UpdatePathLayers(float DeltaSeconds, float
 			if (Layer.BaseMaterial)
 			{
 				const FLinearColor BaseColor = Layer.bPreview
-					? FLinearColor(0.35f, 0.35f, 0.4f, 1.0f)
+					? FLinearColor(0.005f, 0.15f, 0.03f, 1.0f)
 					: FLinearColor(0.03f, 0.12f, 0.22f, 1.0f);
-				const float BaseOpacity = (Layer.bPreview ? 0.78f : 0.14f + PeakCrestGlow * 0.08f) * EffectiveAlpha;
+				const float BaseOpacity = (Layer.bPreview ? 0.38f : 0.14f + PeakCrestGlow * 0.08f) * EffectiveAlpha;
 				Layer.BaseMaterial->SetVectorParameterValue(TEXT("DebugColor"), BaseColor);
 				Layer.BaseMaterial->SetScalarParameterValue(TEXT("Opacity"), BaseOpacity);
 				Layer.BaseMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), BaseOpacity);
-				Layer.BaseMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), (Layer.bPreview ? 0.55f : 0.14f) * CachedGlowIntensity + PeakCrestGlow * CachedGlowIntensity * 0.45f);
+				Layer.BaseMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), (Layer.bPreview ? 1.8f : 0.14f) * CachedGlowIntensity + PeakCrestGlow * CachedGlowIntensity * 0.45f);
 				Layer.BaseMaterial->SetScalarParameterValue(TEXT("WavePhase"), WorldSeconds * CachedVisualSpeed);
 				Layer.BaseMaterial->SetScalarParameterValue(TEXT("FlowBandWidth"), CachedFlowBandWidth);
 			}
@@ -888,12 +889,12 @@ void ASecondarySearchVisualizerActor::UpdatePathLayers(float DeltaSeconds, float
 			if (Layer.WaveMaterial)
 			{
 				const FLinearColor WaveColor = Layer.bPreview
-					? FLinearColor(0.1f, 1.0f, 0.2f, 1.0f)
+					? FLinearColor(0.0f, 1.0f, 0.15f, 1.0f)
 					: PathColor;
 				Layer.WaveMaterial->SetVectorParameterValue(TEXT("DebugColor"), WaveColor);
-				Layer.WaveMaterial->SetScalarParameterValue(TEXT("Opacity"), Layer.bPreview ? 0.95f * EffectiveAlpha : 0.5f * EffectiveAlpha);
-				Layer.WaveMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), Layer.bPreview ? 0.95f * EffectiveAlpha : 0.5f * EffectiveAlpha);
-				Layer.WaveMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), CachedGlowIntensity * (Layer.bPreview ? 2.1f : 0.5f + 0.18f * CrestPulse));
+				Layer.WaveMaterial->SetScalarParameterValue(TEXT("Opacity"), Layer.bPreview ? 0.98f * EffectiveAlpha : 0.5f * EffectiveAlpha);
+				Layer.WaveMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), Layer.bPreview ? 0.98f * EffectiveAlpha : 0.5f * EffectiveAlpha);
+				Layer.WaveMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), CachedGlowIntensity * (Layer.bPreview ? 3.8f : 0.5f + 0.18f * CrestPulse));
 				Layer.WaveMaterial->SetScalarParameterValue(TEXT("WavePhase"), WorldSeconds * CachedVisualSpeed * 1.4f);
 				Layer.WaveMaterial->SetScalarParameterValue(TEXT("FlowBandWidth"), CachedFlowBandWidth);
 			}
@@ -902,12 +903,12 @@ void ASecondarySearchVisualizerActor::UpdatePathLayers(float DeltaSeconds, float
 			if (Layer.WakeMaterial)
 			{
 				const FLinearColor WakeColor = Layer.bPreview
-					? FLinearColor(0.0f, 0.78f, 0.18f, 1.0f)
+					? FLinearColor(0.0f, 0.85f, 0.2f, 1.0f)
 					: PathColor;
 				Layer.WakeMaterial->SetVectorParameterValue(TEXT("DebugColor"), WakeColor);
-				Layer.WakeMaterial->SetScalarParameterValue(TEXT("Opacity"), Layer.bPreview ? 0.55f * EffectiveAlpha : 0.18f * EffectiveAlpha);
-				Layer.WakeMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), Layer.bPreview ? 0.55f * EffectiveAlpha : 0.18f * EffectiveAlpha);
-				Layer.WakeMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), Layer.bPreview ? CachedGlowIntensity : CachedGlowIntensity * 0.35f);
+				Layer.WakeMaterial->SetScalarParameterValue(TEXT("Opacity"), Layer.bPreview ? 0.78f * EffectiveAlpha : 0.18f * EffectiveAlpha);
+				Layer.WakeMaterial->SetScalarParameterValue(TEXT("CoreOpacity"), Layer.bPreview ? 0.78f * EffectiveAlpha : 0.18f * EffectiveAlpha);
+				Layer.WakeMaterial->SetScalarParameterValue(TEXT("EdgeGlow"), Layer.bPreview ? CachedGlowIntensity * 2.2f : CachedGlowIntensity * 0.35f);
 				Layer.WakeMaterial->SetScalarParameterValue(TEXT("WavePhase"), WorldSeconds * CachedVisualSpeed);
 				Layer.WakeMaterial->SetScalarParameterValue(TEXT("FlowBandWidth"), CachedFlowBandWidth);
 		}
@@ -939,8 +940,9 @@ void ASecondarySearchVisualizerActor::UpdatePathLayers(float DeltaSeconds, float
 					SetSplineSegment(Segment.WaveSpline,
 						FMath::Lerp(Segment.Start, Segment.End, LocalStartAlpha),
 						FMath::Lerp(Segment.Start, Segment.End, LocalEndAlpha),
-						(Layer.bPreview ? 3.5f : 3.0f) * CrestRadiusScale,
-						LocalEndAlpha > LocalStartAlpha);
+						(Layer.bPreview ? CachedPathTubeRadius * 0.95f : 3.0f) * CrestRadiusScale,
+						LocalEndAlpha > LocalStartAlpha,
+						Layer.bPreview ? 12.0f : 0.0f);
 				}
 			}
 			if (Segment.WakeSpline)
@@ -953,8 +955,9 @@ void ASecondarySearchVisualizerActor::UpdatePathLayers(float DeltaSeconds, float
 					SetSplineSegment(Segment.WakeSpline,
 						FMath::Lerp(Segment.Start, Segment.End, LocalStartAlpha),
 						FMath::Lerp(Segment.Start, Segment.End, LocalEndAlpha),
-						(Layer.bPreview ? 4.5f : 2.5f) * WakeRadiusScale,
-						LocalEndAlpha > LocalStartAlpha);
+						(Layer.bPreview ? CachedPathTubeRadius * 0.85f : 2.5f) * WakeRadiusScale,
+						LocalEndAlpha > LocalStartAlpha,
+						Layer.bPreview ? 12.0f : 0.0f);
 				}
 			}
 		}
@@ -1128,15 +1131,15 @@ void ASecondarySearchVisualizerActor::AddPathLayer(
 	NewLayer.bWaveComplete = false;
 	NewLayer.BaseMaterial = CreateColorMaterial(
 		PathBaseMaterial,
-		bPreview ? FLinearColor(0.35f, 0.35f, 0.4f, 1.0f) : FLinearColor(0.03f, 0.12f, 0.22f, 1.0f),
+		bPreview ? FLinearColor(0.005f, 0.15f, 0.03f, 1.0f) : FLinearColor(0.03f, 0.12f, 0.22f, 1.0f),
 		TEXT("PathLayerBase"));
 	NewLayer.WaveMaterial = CreateColorMaterial(
 		PathBaseMaterial,
-		bPreview ? FLinearColor(0.1f, 1.0f, 0.2f, 1.0f) : FLinearColor(0.08f, 0.45f, 0.95f, 1.0f),
+		bPreview ? FLinearColor(0.0f, 1.0f, 0.15f, 1.0f) : FLinearColor(0.08f, 0.45f, 0.95f, 1.0f),
 		TEXT("PathLayerWave"));
 	NewLayer.WakeMaterial = CreateColorMaterial(
 		PathBaseMaterial,
-		bPreview ? FLinearColor(0.0f, 0.78f, 0.18f, 1.0f) : FLinearColor(0.04f, 0.32f, 0.75f, 1.0f),
+		bPreview ? FLinearColor(0.0f, 0.85f, 0.2f, 1.0f) : FLinearColor(0.04f, 0.32f, 0.75f, 1.0f),
 		TEXT("PathLayerWake"));
 
 	float RunningDistance = 0.0f;
@@ -1158,12 +1161,12 @@ void ASecondarySearchVisualizerActor::AddPathLayer(
 		Segment.BaseSpline = AcquirePathSpline();
 		Segment.WaveSpline = AcquirePathSpline();
 		Segment.WakeSpline = AcquirePathSpline();
-		ConfigurePathSpline(Segment.BaseSpline, NewLayer.BaseMaterial, bPreview ? Settings.PathTubeRadius * 0.9f : Settings.PathTubeRadius * 0.28f);
-		ConfigurePathSpline(Segment.WaveSpline, NewLayer.WaveMaterial, bPreview ? Settings.PathTubeRadius * 0.55f : Settings.PathTubeRadius * 0.32f);
-		ConfigurePathSpline(Segment.WakeSpline, NewLayer.WakeMaterial, bPreview ? Settings.PathTubeRadius * 0.45f : Settings.PathTubeRadius * 0.22f);
-		SetSplineSegment(Segment.BaseSpline, Start, End, bPreview ? Settings.PathTubeRadius * 0.9f : Settings.PathTubeRadius * 0.28f, true);
-		SetSplineSegment(Segment.WaveSpline, Start, End, bPreview ? Settings.PathTubeRadius * 0.55f : Settings.PathTubeRadius * 0.32f, false);
-		SetSplineSegment(Segment.WakeSpline, Start, End, bPreview ? Settings.PathTubeRadius * 0.45f : Settings.PathTubeRadius * 0.22f, false);
+		ConfigurePathSpline(Segment.BaseSpline, NewLayer.BaseMaterial, bPreview ? Settings.PathTubeRadius * 1.15f : Settings.PathTubeRadius * 0.28f);
+		ConfigurePathSpline(Segment.WaveSpline, NewLayer.WaveMaterial, bPreview ? Settings.PathTubeRadius * 0.90f : Settings.PathTubeRadius * 0.32f);
+		ConfigurePathSpline(Segment.WakeSpline, NewLayer.WakeMaterial, bPreview ? Settings.PathTubeRadius * 0.80f : Settings.PathTubeRadius * 0.22f);
+		SetSplineSegment(Segment.BaseSpline, Start, End, bPreview ? Settings.PathTubeRadius * 1.15f : Settings.PathTubeRadius * 0.28f, true, bPreview ? 12.0f : 0.0f);
+		SetSplineSegment(Segment.WaveSpline, Start, End, bPreview ? Settings.PathTubeRadius * 0.90f : Settings.PathTubeRadius * 0.32f, false, bPreview ? 12.0f : 0.0f);
+		SetSplineSegment(Segment.WakeSpline, Start, End, bPreview ? Settings.PathTubeRadius * 0.80f : Settings.PathTubeRadius * 0.22f, false, bPreview ? 12.0f : 0.0f);
 		NewLayer.Segments.Add(Segment);
 		RunningDistance += Length;
 	}
@@ -1257,14 +1260,14 @@ void ASecondarySearchVisualizerActor::ConfigurePathSpline(USplineMeshComponent* 
 	Spline->SetCanEverAffectNavigation(false);
 }
 
-void ASecondarySearchVisualizerActor::SetSplineSegment(USplineMeshComponent* Spline, const FVector& Start, const FVector& End, float Radius, bool bVisible) const
+void ASecondarySearchVisualizerActor::SetSplineSegment(USplineMeshComponent* Spline, const FVector& Start, const FVector& End, float Radius, bool bVisible, float ExtraZOffset) const
 {
 	if (!Spline)
 	{
 		return;
 	}
-	const FVector LocalStart = GetActorTransform().InverseTransformPosition(Start + FVector(0.0f, 0.0f, CachedTargetZOffset + 16.0f));
-	const FVector LocalEnd = GetActorTransform().InverseTransformPosition(End + FVector(0.0f, 0.0f, CachedTargetZOffset + 16.0f));
+	const FVector LocalStart = GetActorTransform().InverseTransformPosition(Start + FVector(0.0f, 0.0f, CachedTargetZOffset + 16.0f + ExtraZOffset));
+	const FVector LocalEnd = GetActorTransform().InverseTransformPosition(End + FVector(0.0f, 0.0f, CachedTargetZOffset + 16.0f + ExtraZOffset));
 	const FVector Direction = (LocalEnd - LocalStart).GetSafeNormal();
 	const FVector Tangent = Direction * FVector::Dist(LocalStart, LocalEnd) * 0.5f;
 	Spline->SetStartScale(FVector2D(Radius / 50.0f, Radius / 50.0f));

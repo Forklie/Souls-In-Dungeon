@@ -2,6 +2,7 @@
 #include "EngineUtils.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Kismet/GameplayStatics.h"
+#include "Blueprint/UserWidget.h"
 
 ADungeonProgressionState::ADungeonProgressionState()
 {
@@ -127,6 +128,25 @@ void ADungeonProgressionState::CompleteGame()
     if (PC)
     {
         PC->SetPause(true);
+
+        // Show the "YOU WON" victory screen
+        if (UClass* WinWidgetClass = LoadClass<UUserWidget>(nullptr, TEXT("/Game/ThirdPerson/UI/WBP_WinScreen.WBP_WinScreen_C")))
+        {
+            UUserWidget* WinWidget = CreateWidget<UUserWidget>(PC, WinWidgetClass);
+            if (WinWidget)
+            {
+                WinWidget->AddToViewport(100);
+            }
+
+            // Show mouse cursor and set UI input mode
+            PC->bShowMouseCursor = true;
+            FInputModeUIOnly UIMode;
+            if (WinWidget)
+            {
+                UIMode.SetWidgetToFocus(WinWidget->TakeWidget());
+            }
+            PC->SetInputMode(UIMode);
+        }
     }
 }
 

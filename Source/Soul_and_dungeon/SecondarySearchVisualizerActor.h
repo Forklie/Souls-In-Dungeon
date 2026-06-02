@@ -136,7 +136,7 @@ private:
 	USplineMeshComponent* AcquirePathSpline();
 	void ReleasePathSpline(USplineMeshComponent* Spline);
 	void ConfigurePathSpline(USplineMeshComponent* Spline, UMaterialInterface* Material, float Radius) const;
-	void SetSplineSegment(USplineMeshComponent* Spline, const FVector& Start, const FVector& End, float Radius, bool bVisible) const;
+	void SetSplineSegment(USplineMeshComponent* Spline, const FVector& Start, const FVector& End, float Radius, bool bVisible, float ExtraZOffset = 0.0f) const;
 	FTransform MakeDiskTransform(const FVector& Location, float Radius, float Height, float ZOffset) const;
 	FTransform MakeSphereTransform(const FVector& Location, float Radius, float ZOffset) const;
 	FTransform MakeTubeTransform(const FVector& Start, const FVector& End, float Radius, float ZOffset) const;
@@ -276,6 +276,7 @@ private:
 	float CachedNodeSoftness = 0.75f;
 	float CachedTargetSmoothing = 18.0f;
 	float CachedTargetZOffset = 80.0f;
+	float CachedPathTubeRadius = 5.0f;
 	float LastNodeUpdateSeconds = 0.0f;
 	int32 LastVisualizationRevision = -1;
 	int32 LastSearchGeneration = -1;

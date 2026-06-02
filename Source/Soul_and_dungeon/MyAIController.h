@@ -59,6 +59,7 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaTime) override;
 
 private:
@@ -84,7 +85,7 @@ private:
 	EEnemyNavigationMode GetNavigationMode() const;
 	void UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float CurrentTime);
 	FSecondarySearchSettings BuildSecondarySearchSettings() const;
-	bool ShouldRefreshSearchDebug(const FVector& GoalLocation, float CurrentTime, ESecondarySearchMode SearchMode, const FSecondarySearchSettings& Settings) const;
+	bool ShouldRefreshSearchDebug(const FVector& StartLocation, const FVector& GoalLocation, float CurrentTime, ESecondarySearchMode SearchMode, const FSecondarySearchSettings& Settings) const;
 	bool ShouldRebuildDebugBaseGrid(const FVector& CenterLocation, const FSecondarySearchSettings& Settings) const;
 	void RebuildDebugBaseGrid(const FVector& CenterLocation, const FSecondarySearchSettings& Settings);
 	void EnsureSecondarySearchVisualizer(APawn* AI);
@@ -168,6 +169,7 @@ private:
 	TObjectPtr<ASecondarySearchVisualizerActor> SearchVisualizer;
 
 	ESecondarySearchMode LastSearchMode = ESecondarySearchMode::UCS;
+	FVector LastSearchStart = FVector::ZeroVector;
 	FVector LastSearchGoal = FVector::ZeroVector;
 	FString LastSearchFailureReason;
 	float LastSearchTime = -1000000.0f;

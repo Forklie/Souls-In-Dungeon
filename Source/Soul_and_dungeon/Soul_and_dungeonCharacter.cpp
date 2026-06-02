@@ -25,6 +25,7 @@
 #include "MinimapWidget.h"
 #include "MinimapDataProvider.h"
 #include "DungeonGenerator.h"
+#include "LevelChestSpawnDirector.h"
 #include "LevelManager.h"
 #include "TimerManager.h"
 #include "AIController.h"
@@ -637,6 +638,23 @@ void ASoul_and_dungeonCharacter::EnsurePlayerHudWidgets()
 					if (Generator && Generator->MinimapData && Generator->MinimapData->HasData())
 					{
 						MinimapWidget->SetDataProvider(Generator->MinimapData);
+						bFoundGenerator = true;
+						break;
+					}
+				}
+			}
+
+			// Strategy 1.5: Static levels can provide chest/minimap data through a chest spawn director.
+			if (!bFoundGenerator && GetWorld())
+			{
+				TArray<AActor*> ChestSpawnDirectors;
+				UGameplayStatics::GetAllActorsOfClass(GetWorld(), ALevelChestSpawnDirector::StaticClass(), ChestSpawnDirectors);
+				for (AActor* DirectorActor : ChestSpawnDirectors)
+				{
+					ALevelChestSpawnDirector* Director = Cast<ALevelChestSpawnDirector>(DirectorActor);
+					if (Director && Director->GetMinimapDataProvider() && Director->GetMinimapDataProvider()->HasData())
+					{
+						MinimapWidget->SetDataProvider(Director->GetMinimapDataProvider());
 						bFoundGenerator = true;
 						break;
 					}

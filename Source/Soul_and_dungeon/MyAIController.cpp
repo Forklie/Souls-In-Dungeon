@@ -93,6 +93,8 @@ static TAutoConsoleVariable<float> CVarEnemyInterceptDebugLogInterval(
 	TEXT("Minimum seconds between repeated enemy intercept debug logs."),
 	ECVF_Default);
 
+static TWeakObjectPtr<AMyAIController> GSecondarySearchDebugOwner;
+
 static FVector CatmullRomPoint(const FVector& P0, const FVector& P1, const FVector& P2, const FVector& P3, float T)
 {
 	const float T2 = T * T;
@@ -250,6 +252,17 @@ AMyAIController::AMyAIController()
 void AMyAIController::BeginPlay()
 {
 	Super::BeginPlay();
+}
+
+void AMyAIController::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (GSecondarySearchDebugOwner.Get() == this)
+	{
+		GSecondarySearchDebugOwner.Reset();
+	}
+
+	HideSecondarySearchVisualizer();
+	Super::EndPlay(EndPlayReason);
 }
 
 void AMyAIController::UpdateChaseSound(APawn* AI, bool bShouldPlay)
@@ -1600,12 +1613,25 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 			AStarResult = FSecondarySearchResult();
 			LastSearchResult = FSecondarySearchResult();
 			DebugBaseGridNodes.Reset();
+			LastSearchStart = FVector::ZeroVector;
+			LastSearchGoal = FVector::ZeroVector;
 			bHasSearchResult = false;
 			bDebugSearchWasEnabled = false;
 			HideSecondarySearchVisualizer();
 		}
+		if (GSecondarySearchDebugOwner.Get() == this)
+		{
+			GSecondarySearchDebugOwner.Reset();
+		}
 		return;
 	}
+
+	if (!GSecondarySearchDebugOwner.IsValid() || !GSecondarySearchDebugOwner->GetPawn())
+	{
+		GSecondarySearchDebugOwner = this;
+	}
+
+	const bool bOwnsSharedBaseGrid = GSecondarySearchDebugOwner.Get() == this;
 
 	bDebugSearchWasEnabled = true;
 	EnsureSecondarySearchVisualizer(AI);
@@ -1623,6 +1649,8 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 		LastSearchResult = FSecondarySearchResult();
 		DebugBaseGridNodes.Reset();
 		LastSearchFailureReason.Empty();
+		LastSearchStart = FVector::ZeroVector;
+		LastSearchGoal = FVector::ZeroVector;
 		bHasSearchResult = false;
 		ActiveSecondarySearchSettings = EffectiveSearchSettings;
 		LastVisualizerUpdateTime = -1000000.0f;
@@ -1635,7 +1663,7 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 		return;
 	}
 
-	if (ShouldRebuildDebugBaseGrid(AI->GetActorLocation(), EffectiveSearchSettings))
+	if (bOwnsSharedBaseGrid && ShouldRebuildDebugBaseGrid(AI->GetActorLocation(), EffectiveSearchSettings))
 	{
 		RebuildDebugBaseGrid(AI->GetActorLocation(), EffectiveSearchSettings);
 	}
@@ -1645,20 +1673,22 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 	const int32 RequiredNodes = FMath::Clamp(FMath::CeilToInt(FMath::Square(DistToPlayer / EffectiveSearchSettings.CellSize) * 0.1f), 10000, 100000);
 	EffectiveSearchSettings.MaxExpandedNodes = FMath::Max(EffectiveSearchSettings.MaxExpandedNodes, RequiredNodes);
 
-	FVector SearchGoalLocation = Player->GetActorLocation();
+	const FVector SearchStartLocation = AI->GetActorLocation();
+	const FVector SearchGoalLocation = Player->GetActorLocation();
 
 	const ESecondarySearchMode SearchMode = FSecondarySearchDebug::GetMode();
-	if (!BFSTask.IsActive() && !UCSTask.IsActive() && !AStarTask.IsActive() && ShouldRefreshSearchDebug(SearchGoalLocation, CurrentTime, SearchMode, EffectiveSearchSettings))
+	if (!BFSTask.IsActive() && !UCSTask.IsActive() && !AStarTask.IsActive() && ShouldRefreshSearchDebug(SearchStartLocation, SearchGoalLocation, CurrentTime, SearchMode, EffectiveSearchSettings))
 	{
 		LastSearchMode = SearchMode;
+		LastSearchStart = SearchStartLocation;
 		LastSearchGoal = SearchGoalLocation;
 		LastSearchTime = CurrentTime;
 		LastDebugRevision = FSecondarySearchDebug::GetRevision();
 		ActiveSecondarySearchSettings = EffectiveSearchSettings;
 
-		BFSTask.Start(GetWorld(), AI->GetActorLocation(), SearchGoalLocation, ESecondarySearchMode::BFS, ActiveSecondarySearchSettings);
-		UCSTask.Start(GetWorld(), AI->GetActorLocation(), SearchGoalLocation, ESecondarySearchMode::UCS, ActiveSecondarySearchSettings);
-		AStarTask.Start(GetWorld(), AI->GetActorLocation(), SearchGoalLocation, ESecondarySearchMode::AStar, ActiveSecondarySearchSettings);
+		BFSTask.Start(GetWorld(), SearchStartLocation, SearchGoalLocation, ESecondarySearchMode::BFS, ActiveSecondarySearchSettings);
+		UCSTask.Start(GetWorld(), SearchStartLocation, SearchGoalLocation, ESecondarySearchMode::UCS, ActiveSecondarySearchSettings);
+		AStarTask.Start(GetWorld(), SearchStartLocation, SearchGoalLocation, ESecondarySearchMode::AStar, ActiveSecondarySearchSettings);
 	}
 
 	const FSecondarySearchSettings& StepSettings = ActiveSecondarySearchSettings;
@@ -1732,7 +1762,7 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 	LastSearchResult.Path = MovementPath;
 	LastSearchResult.PreviewPath = MovementPath;
 
-	LastSearchResult.SampledNodes = DebugBaseGridNodes;
+	LastSearchResult.SampledNodes = bOwnsSharedBaseGrid ? DebugBaseGridNodes : TArray<FVector>();
 	LastSearchResult.StartLocation = AI->GetActorLocation();
 	LastSearchResult.GoalLocation = Player->GetActorLocation();
 	LastSearchResult.CurrentTarget = LastActivePathTarget.IsNearlyZero() ? Player->GetActorLocation() : LastActivePathTarget;
@@ -1779,7 +1809,7 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 			FSecondarySearchDebug::GetWaveSpeed(),
 			FSecondarySearchDebug::GetPathHistoryCount(),
 			FSecondarySearchDebug::GetNodeScale(),
-			FSecondarySearchDebug::ShouldShowBaseGrid(),
+			bOwnsSharedBaseGrid && FSecondarySearchDebug::ShouldShowBaseGrid(),
 			FSecondarySearchDebug::GetTargetSmoothing(),
 			FSecondarySearchDebug::GetNodePulse(),
 			FSecondarySearchDebug::GetNodeFadeTime(),
@@ -1807,7 +1837,7 @@ FSecondarySearchSettings AMyAIController::BuildSecondarySearchSettings() const
 	return Settings;
 }
 
-bool AMyAIController::ShouldRefreshSearchDebug(const FVector& GoalLocation, float CurrentTime, ESecondarySearchMode SearchMode, const FSecondarySearchSettings& Settings) const
+bool AMyAIController::ShouldRefreshSearchDebug(const FVector& StartLocation, const FVector& GoalLocation, float CurrentTime, ESecondarySearchMode SearchMode, const FSecondarySearchSettings& Settings) const
 {
 	if (!bHasSearchResult || LastSearchMode != SearchMode || LastDebugRevision != FSecondarySearchDebug::GetRevision())
 	{
@@ -1820,7 +1850,9 @@ bool AMyAIController::ShouldRefreshSearchDebug(const FVector& GoalLocation, floa
 	}
 
 	const float GoalMoveThreshold = Settings.CellSize * 0.5f;
-	return FVector::DistSquared2D(GoalLocation, LastSearchGoal) > FMath::Square(GoalMoveThreshold);
+	const bool bStartMoved = FVector::DistSquared2D(StartLocation, LastSearchStart) > FMath::Square(GoalMoveThreshold);
+	const bool bGoalMoved = FVector::DistSquared2D(GoalLocation, LastSearchGoal) > FMath::Square(GoalMoveThreshold);
+	return bStartMoved || bGoalMoved;
 }
 
 bool AMyAIController::ShouldRebuildDebugBaseGrid(const FVector& CenterLocation, const FSecondarySearchSettings& Settings) const
