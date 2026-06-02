@@ -8,6 +8,7 @@
 #include "MyAIController.generated.h"
 
 class UAnimInstance;
+class UAnimSequenceBase;
 class UAudioComponent;
 class USoundBase;
 class ASecondarySearchVisualizerActor;
@@ -90,13 +91,29 @@ private:
 	void HideSecondarySearchVisualizer();
 	void EnsureNavMeshBounds(APawn* AI, APawn* Player);
 	void SetAttackAnimationState(UAnimInstance* AnimInstance, bool bIsAttacking) const;
+	void StartAttackCycle(ACharacter* AICharacter, float CurrentTime);
+	void ApplyEnemyAttackDamage(APawn* AI, APawn* Player);
+	void StartAttackAnimation(ACharacter* AICharacter) const;
+	void StopAttackAnimation(ACharacter* AICharacter) const;
 	void UpdateChaseSound(APawn* AI, bool bShouldPlay);
 	void StopChaseSound();
 
-	float StopDistance = 150.0f;
+	float StopDistance = 95.0f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Audio")
 	TObjectPtr<USoundBase> SkeletonChaseSound = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Combat")
+	TObjectPtr<UAnimSequenceBase> EnemyAttackAnimation = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Combat", meta = (ClampMin = "0.0"))
+	float EnemyAttackDamage = 10.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Combat", meta = (ClampMin = "0.0"))
+	float EnemyAttackDelay = 0.5f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Combat", meta = (ClampMin = "0.1"))
+	float EnemyAttackInterval = 1.733f;
 
 	UPROPERTY()
 	TObjectPtr<UAudioComponent> ChaseAudioComponent = nullptr;
@@ -171,7 +188,7 @@ private:
 	
 	// Attack State Management
 	bool bIsCurrentlyAttacking = false;
+	bool bDamageAppliedThisAttack = false;
 	float LastAttackStartTime = 0.0f;
-	float MinAttackDuration = 0.8f; // Ensure at least one full swing can play
-	float AttackHysteresis = 80.0f; // Distance buffer to prevent rapid switching
+	float AttackHysteresis = 35.0f; // Distance buffer to prevent rapid switching
 };

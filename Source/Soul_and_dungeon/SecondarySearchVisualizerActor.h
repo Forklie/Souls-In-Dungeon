@@ -115,7 +115,7 @@ private:
 	void UpdateRetainedNodeInstances(const FSecondarySearchResult& Result, const FSecondarySearchSettings& Settings, int32 NodeCap, float WorldSeconds);
 	void UpdateEndpointMarkers(const FSecondarySearchResult& Result, const FSecondarySearchSettings& Settings);
 	void UpdateSimplePathInstances(const FSecondarySearchResult& Result, const FSecondarySearchSettings& Settings);
-	void UpdatePreviewPathInstances(const FSecondarySearchResult& Result, const FSecondarySearchSettings& Settings, float WorldSeconds);
+	void UpdatePreviewPathInstances(const FSecondarySearchResult& Result, const FSecondarySearchSettings& Settings, float WorldSeconds, bool bTrailsEnabled);
 	void UpdateStatusHud(const FSecondarySearchResult& Result) const;
 	void UpdateFluidAnimation(float DeltaSeconds, float WorldSeconds);
 	void UpdatePathLayers(float DeltaSeconds, float WorldSeconds);

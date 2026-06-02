@@ -7,6 +7,7 @@
 #include "LevelManager.h"
 #include "Kismet/GameplayStatics.h"
 #include "DrawDebugHelpers.h"
+#include "MyAIController.h"
 
 void UAnimNotify_EnemyAttack::Notify(USkeletalMeshComponent* MeshComp, UAnimSequenceBase* Animation, const FAnimNotifyEventReference& EventReference)
 {
@@ -22,6 +23,14 @@ void UAnimNotify_EnemyAttack::Notify(USkeletalMeshComponent* MeshComp, UAnimSequ
 	if (!World)
 	{
 		return;
+	}
+
+	if (const APawn* OwnerPawn = Cast<APawn>(OwnerActor))
+	{
+		if (Cast<AMyAIController>(OwnerPawn->GetController()))
+		{
+			return;
+		}
 	}
 
 	if (ALevelManager* LevelManager = ALevelManager::GetActiveLevelManager(OwnerActor))

@@ -468,7 +468,7 @@ namespace SecondarySearchDebugState
 	static bool bEnabled = true;
 	static bool bPendingClear = false;
 	static bool bXRayEnabled = true;
-	static bool bTrailsEnabled = true;
+	static bool bTrailsEnabled = false;
 	static bool bShowBaseGrid = true;
 	static bool bLastPathFallback = true;
 	static ESecondarySearchMode Mode = ESecondarySearchMode::UCS;
@@ -476,14 +476,14 @@ namespace SecondarySearchDebugState
 	static ESecondarySearchVisualQuality VisualQuality = ESecondarySearchVisualQuality::High;
 	static int32 Revision = 0;
 	static int32 MaxDebugNodes = 12000;
-	static int32 PathHistoryCount = 3;
+	static int32 PathHistoryCount = 1;
 	static float VisualSpeed = 1.0f;
 	static float WaveSpeed = 1.0f;
 	static float NodePulse = 1.0f;
 	static float NodeFadeTime = 1.2f;
-	static float PathFadeTime = 4.0f;
-	static float GlowIntensity = 1.0f;
-	static float FlowBandWidth = 0.18f;
+	static float PathFadeTime = 1.25f;
+	static float GlowIntensity = 0.55f;
+	static float FlowBandWidth = 0.12f;
 	static float NodeSoftness = 0.75f;
 	static float CellSize = 28.0f;
 	static float NodeScale = 0.24f;
@@ -662,14 +662,14 @@ namespace SecondarySearchDebugState
 	static FAutoConsoleCommand SpeedConsoleCommand(TEXT("sd.SearchDebug.Speed"), TEXT("Usage: sd.SearchDebug.Speed 1.0."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, VisualSpeed, 0.1f, 5.0f, TEXT("Secondary search visual speed")); }));
 	static FAutoConsoleCommand TrailsConsoleCommand(TEXT("sd.SearchDebug.Trails"), TEXT("Usage: sd.SearchDebug.Trails 0 or 1."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { BoolCommand(Args, bTrailsEnabled, TEXT("Secondary search trails")); }));
 	static FAutoConsoleCommand WaveSpeedConsoleCommand(TEXT("sd.SearchDebug.WaveSpeed"), TEXT("Usage: sd.SearchDebug.WaveSpeed 1.0."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, WaveSpeed, 0.1f, 5.0f, TEXT("Secondary search wave speed")); }));
-	static FAutoConsoleCommand PathHistoryConsoleCommand(TEXT("sd.SearchDebug.PathHistory"), TEXT("Usage: sd.SearchDebug.PathHistory 3."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { IntCommand(Args, PathHistoryCount, 1, 8, TEXT("Secondary search path history")); }));
+	static FAutoConsoleCommand PathHistoryConsoleCommand(TEXT("sd.SearchDebug.PathHistory"), TEXT("Usage: sd.SearchDebug.PathHistory 1."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { IntCommand(Args, PathHistoryCount, 1, 8, TEXT("Secondary search path history")); }));
 	static FAutoConsoleCommand NodePulseConsoleCommand(TEXT("sd.SearchDebug.NodePulse"), TEXT("Usage: sd.SearchDebug.NodePulse 1.0."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, NodePulse, 0.0f, 3.0f, TEXT("Secondary search node pulse")); }));
 	static FAutoConsoleCommand NodeFadeTimeConsoleCommand(TEXT("sd.SearchDebug.NodeFadeTime"), TEXT("Usage: sd.SearchDebug.NodeFadeTime 1.2."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, NodeFadeTime, 0.2f, 5.0f, TEXT("Secondary search node fade time")); }));
-	static FAutoConsoleCommand PathFadeTimeConsoleCommand(TEXT("sd.SearchDebug.PathFadeTime"), TEXT("Usage: sd.SearchDebug.PathFadeTime 4.0."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, PathFadeTime, 0.5f, 10.0f, TEXT("Secondary search path fade time")); }));
+	static FAutoConsoleCommand PathFadeTimeConsoleCommand(TEXT("sd.SearchDebug.PathFadeTime"), TEXT("Usage: sd.SearchDebug.PathFadeTime 1.25."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, PathFadeTime, 0.5f, 10.0f, TEXT("Secondary search path fade time")); }));
 	static FAutoConsoleCommand LastPathFallbackConsoleCommand(TEXT("sd.SearchDebug.LastPathFallback"), TEXT("Usage: sd.SearchDebug.LastPathFallback 1."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { BoolCommand(Args, bLastPathFallback, TEXT("Secondary search last path fallback")); }));
 	static FAutoConsoleCommand QualityConsoleCommand(TEXT("sd.SearchDebug.Quality"), TEXT("Usage: sd.SearchDebug.Quality Low, Medium, or High."), FConsoleCommandWithArgsDelegate::CreateStatic(&QualityCommand));
-	static FAutoConsoleCommand GlowConsoleCommand(TEXT("sd.SearchDebug.Glow"), TEXT("Usage: sd.SearchDebug.Glow 1.0."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, GlowIntensity, 0.0f, 3.0f, TEXT("Secondary search glow")); }));
-	static FAutoConsoleCommand FlowBandConsoleCommand(TEXT("sd.SearchDebug.FlowBand"), TEXT("Usage: sd.SearchDebug.FlowBand 0.18."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, FlowBandWidth, 0.05f, 0.5f, TEXT("Secondary search flow band")); }));
+	static FAutoConsoleCommand GlowConsoleCommand(TEXT("sd.SearchDebug.Glow"), TEXT("Usage: sd.SearchDebug.Glow 0.55."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, GlowIntensity, 0.0f, 3.0f, TEXT("Secondary search glow")); }));
+	static FAutoConsoleCommand FlowBandConsoleCommand(TEXT("sd.SearchDebug.FlowBand"), TEXT("Usage: sd.SearchDebug.FlowBand 0.12."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, FlowBandWidth, 0.05f, 0.5f, TEXT("Secondary search flow band")); }));
 	static FAutoConsoleCommand NodeSoftnessConsoleCommand(TEXT("sd.SearchDebug.NodeSoftness"), TEXT("Usage: sd.SearchDebug.NodeSoftness 0.75."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, NodeSoftness, 0.1f, 1.0f, TEXT("Secondary search node softness")); }));
 }
 #endif

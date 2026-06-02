@@ -1,7 +1,9 @@
 #include "MyAIController.h"
 
 #include "Animation/AnimInstance.h"
+#include "Animation/AnimSequenceBase.h"
 #include "Components/AudioComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
 #include "Engine/World.h"
@@ -236,6 +238,12 @@ AMyAIController::AMyAIController()
 	if (DefaultChaseSound.Succeeded())
 	{
 		SkeletonChaseSound = DefaultChaseSound.Object;
+	}
+
+	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> DefaultAttackAnimation(TEXT("/Game/Characters/Skeleton/Animation/Mini_skeleton_Attack.Mini_skeleton_Attack"));
+	if (DefaultAttackAnimation.Succeeded())
+	{
+		EnemyAttackAnimation = DefaultAttackAnimation.Object;
 	}
 }
 
@@ -939,13 +947,7 @@ void AMyAIController::Tick(float DeltaTime)
 		if (bIsCurrentlyAttacking)
 		{
 			bIsCurrentlyAttacking = false;
-			if (ACharacter* AICharacter = Cast<ACharacter>(AI))
-			{
-				if (UAnimInstance* AnimInstance = AICharacter->GetMesh()->GetAnimInstance())
-				{
-					SetAttackAnimationState(AnimInstance, false);
-				}
-			}
+			bDamageAppliedThisAttack = false;
 		}
 
 		StopMovement();
@@ -964,6 +966,7 @@ void AMyAIController::Tick(float DeltaTime)
 					bIsCurrentlyAttacking = false;
 					if (ACharacter* AICharacter = Cast<ACharacter>(AI))
 					{
+						StopAttackAnimation(AICharacter);
 						if (UAnimInstance* AnimInstance = AICharacter->GetMesh()->GetAnimInstance())
 						{
 							SetAttackAnimationState(AnimInstance, false);
@@ -987,6 +990,7 @@ void AMyAIController::Tick(float DeltaTime)
 					bIsCurrentlyAttacking = false;
 					if (ACharacter* AICharacter = Cast<ACharacter>(AI))
 					{
+						StopAttackAnimation(AICharacter);
 						if (UAnimInstance* AnimInstance = AICharacter->GetMesh()->GetAnimInstance())
 						{
 							SetAttackAnimationState(AnimInstance, bIsCurrentlyAttacking);
@@ -1007,18 +1011,9 @@ void AMyAIController::Tick(float DeltaTime)
 	}
 
 
-	UAnimInstance* AnimInstance = AICharacter->GetMesh()->GetAnimInstance();
+	USkeletalMeshComponent* AIMesh = AICharacter->GetMesh();
+	UAnimInstance* AnimInstance = AIMesh ? AIMesh->GetAnimInstance() : nullptr;
 	const float CurrentTime = GetWorld()->GetTimeSeconds();
-
-	// Calculate attack state with hysteresis to prevent animation resetting when the player moves slightly
-	const float AttackDistance = bIsCurrentlyAttacking ? (StopDistance + AttackHysteresis) : StopDistance;
-	bool bAttackRequested = HasAttackReach(AI, Player, AttackDistance);
-	
-	// Ensure we don't exit an attack too quickly
-	if (bIsCurrentlyAttacking && (CurrentTime - LastAttackStartTime) < MinAttackDuration)
-	{
-		bAttackRequested = true;
-	}
 
 	// Check if we are currently reacting to a hit (non-montage overlay)
 	bool bIsReacting = false;
@@ -1027,14 +1022,48 @@ void AMyAIController::Tick(float DeltaTime)
 		bIsReacting = SoulChar->bHitReactionOverlay;
 	}
 
-	if (bAttackRequested && !bIsCurrentlyAttacking)
+	// Allow a small reach buffer over the move acceptance radius so the enemy attacks instead of waiting for exact capsule spacing.
+	const float AttackStartDistance = StopDistance + 30.0f;
+	const float AttackContinueDistance = AttackStartDistance + AttackHysteresis;
+	const bool bHasAttackStartReach = !bIsReacting && HasAttackReach(AI, Player, AttackStartDistance);
+	const bool bHasAttackContinueReach = !bIsReacting && HasAttackReach(AI, Player, AttackContinueDistance);
+
+	if (bIsCurrentlyAttacking)
 	{
-		bIsCurrentlyAttacking = true;
-		LastAttackStartTime = CurrentTime;
+		const float AttackElapsed = CurrentTime - LastAttackStartTime;
+		if (!bDamageAppliedThisAttack && AttackElapsed >= EnemyAttackDelay)
+		{
+			if (bHasAttackContinueReach)
+			{
+				ApplyEnemyAttackDamage(AI, Player);
+			}
+			bDamageAppliedThisAttack = true;
+		}
+
+		if (AttackElapsed >= EnemyAttackInterval)
+		{
+			if (bHasAttackContinueReach)
+			{
+				StartAttackCycle(AICharacter, CurrentTime);
+			}
+			else
+			{
+				bIsCurrentlyAttacking = false;
+				bDamageAppliedThisAttack = false;
+				StopAttackAnimation(AICharacter);
+			}
+		}
 	}
-	else if (!bAttackRequested && bIsCurrentlyAttacking)
+	else if (bHasAttackStartReach)
+	{
+		StartAttackCycle(AICharacter, CurrentTime);
+	}
+
+	if (bIsReacting && bIsCurrentlyAttacking)
 	{
 		bIsCurrentlyAttacking = false;
+		bDamageAppliedThisAttack = false;
+		StopAttackAnimation(AICharacter);
 	}
 
 	UpdateChaseSound(AI, !bUsingTrainingTarget && !bIsCurrentlyAttacking && !bIsReacting);
@@ -1057,23 +1086,15 @@ void AMyAIController::Tick(float DeltaTime)
 	UpdateSecondarySearchDebug(AI, Player, CurrentTime);
 	SetAttackAnimationState(AnimInstance, bIsCurrentlyAttacking);
 
-	// Velocity-Based Deceleration: Slow down as we approach the target to prevent jitter and overshooting
+	// Keep chase speed independent from player speed/proximity. Attack reach handles stopping.
 	if (ACharacter* Char = Cast<ACharacter>(AI))
 	{
-		float TargetSpeed = 600.0f; // Default base speed
-		const float DistToTarget = FVector::Dist(AI->GetActorLocation(), Player->GetActorLocation());
-
-		const bool bHasClearRouteToPlayer = HasClearNavigationSegment(AI->GetActorLocation(), Player->GetActorLocation());
-		if (bHasClearRouteToPlayer && DistToTarget < 500.0f)
-		{
-			// Linearly scale speed down to 200.0f as we get closer to the StopDistance
-			const float Alpha = FMath::Clamp((DistToTarget - StopDistance) / (500.0f - StopDistance), 0.0f, 1.0f);
-			TargetSpeed = FMath::Lerp(200.0f, 600.0f, Alpha);
-		}
-
 		if (UCharacterMovementComponent* MoveComp = Char->GetCharacterMovement())
 		{
-			MoveComp->MaxWalkSpeed = TargetSpeed;
+			MoveComp->MaxWalkSpeed = 600.0f;
+			MoveComp->bEnablePhysicsInteraction = false;
+			MoveComp->InitialPushForceFactor = 0.0f;
+			MoveComp->PushForceFactor = 0.0f;
 		}
 	}
 }
@@ -1162,7 +1183,7 @@ void AMyAIController::UpdateAStarNavigation(APawn* AI, APawn* Player, float Curr
 			}
 			else
 			{
-				MoveToActor(Player, StopDistance * 0.5f, false, true, true, nullptr, false);
+				MoveToActor(Player, StopDistance, false, true, true, nullptr, false);
 				LastIssuedMoveTarget = Player->GetActorLocation();
 				LastActivePathTarget = Player->GetActorLocation();
 				bHasIssuedMoveTarget = true;
@@ -1182,8 +1203,8 @@ void AMyAIController::UpdateAStarNavigation(APawn* AI, APawn* Player, float Curr
 	bUsedFallback = true;
 	if (!bFollowingPath || !bLastIssuedMoveWasFallback || (CurrentTime - LastMoveIssueTime) >= AStarReplanInterval)
 	{
-		MoveToActor(Player, StopDistance * 0.5f, false, true, true, nullptr, false);
-		TryDirectCommandletPathFollow(AI, Player->GetActorLocation(), DeltaTime, StopDistance * 0.5f);
+		MoveToActor(Player, StopDistance, false, true, true, nullptr, false);
+		TryDirectCommandletPathFollow(AI, Player->GetActorLocation(), DeltaTime, StopDistance);
 		LastIssuedMoveTarget = Player->GetActorLocation();
 		LastActivePathTarget = Player->GetActorLocation();
 		bHasIssuedMoveTarget = true;
@@ -1958,5 +1979,62 @@ void AMyAIController::SetAttackAnimationState(UAnimInstance* AnimInstance, bool 
 	if (FBoolProperty* BoolProp = CastField<FBoolProperty>(Prop))
 	{
 		BoolProp->SetPropertyValue_InContainer(AnimInstance, bIsAttacking);
+	}
+}
+
+void AMyAIController::StartAttackCycle(ACharacter* AICharacter, float CurrentTime)
+{
+	bIsCurrentlyAttacking = true;
+	bDamageAppliedThisAttack = false;
+	LastAttackStartTime = CurrentTime;
+	StartAttackAnimation(AICharacter);
+}
+
+void AMyAIController::ApplyEnemyAttackDamage(APawn* AI, APawn* Player)
+{
+	if (!AI || !Player || Player->ActorHasTag(TEXT("Dead")))
+	{
+		return;
+	}
+
+	if (ASoul_and_dungeonCharacter* PlayerCharacter = Cast<ASoul_and_dungeonCharacter>(Player))
+	{
+		if (PlayerCharacter->bIsDead)
+		{
+			return;
+		}
+	}
+
+	UGameplayStatics::ApplyDamage(
+		Player,
+		EnemyAttackDamage,
+		this,
+		AI,
+		nullptr);
+}
+
+void AMyAIController::StartAttackAnimation(ACharacter* AICharacter) const
+{
+	if (!AICharacter || !EnemyAttackAnimation)
+	{
+		return;
+	}
+
+	if (USkeletalMeshComponent* Mesh = AICharacter->GetMesh())
+	{
+		Mesh->PlayAnimation(EnemyAttackAnimation, false);
+	}
+}
+
+void AMyAIController::StopAttackAnimation(ACharacter* AICharacter) const
+{
+	if (!AICharacter)
+	{
+		return;
+	}
+
+	if (USkeletalMeshComponent* Mesh = AICharacter->GetMesh())
+	{
+		Mesh->SetAnimationMode(EAnimationMode::AnimationBlueprint);
 	}
 }

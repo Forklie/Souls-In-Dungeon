@@ -221,6 +221,8 @@ public:
 	/** How often to capture the scene for the minimap (seconds, 0.0 = every frame) */
 	float MinimapCaptureInterval = 0.0f;
 	float MinimapCaptureTimer = 0.0f;
+	FVector StableMinimapCenterLocation = FVector::ZeroVector;
+	bool bHasStableMinimapCenterLocation = false;
 
 private:
 	bool IsInteractableActor(AActor* Actor) const;

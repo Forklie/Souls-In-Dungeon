@@ -8,6 +8,7 @@
 #include "Components/SceneComponent.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
@@ -147,14 +148,14 @@ ASoul_and_dungeonCharacter::ASoul_and_dungeonCharacter()
 
 	// 🗺️ MINIMAP — Top-down scene capture for the minimap texture.
 	// Uses a plain USceneComponent (NOT a spring arm) because USpringArmComponent
-	// has its own PostPhysics tick that recomputes rotation from the parent,
-	// overriding any SetWorldRotation calls we make in the character tick.
-	// bAbsoluteRotation = true ensures it ignores the character's rotation entirely.
+	// has its own PostPhysics tick that recomputes rotation from the parent.
+	// Location and rotation are absolute so attack root-motion jitter cannot move
+	// the minimap camera; Tick positions it from a stable minimap center.
 	MinimapBoom = CreateDefaultSubobject<USceneComponent>(TEXT("MinimapBoom"));
 	MinimapBoom->SetupAttachment(RootComponent);
 	MinimapBoom->SetRelativeLocation(FVector(0.0f, 0.0f, 3000.0f));
 	MinimapBoom->SetRelativeRotation(FRotator(-90.0f, 0.0f, 0.0f));
-	MinimapBoom->SetAbsolute(false, true, false); // bAbsoluteRotation = true
+	MinimapBoom->SetAbsolute(true, true, false);
 
 	MinimapCapture = CreateDefaultSubobject<USceneCaptureComponent2D>(TEXT("MinimapCapture"));
 	MinimapCapture->SetupAttachment(MinimapBoom);
@@ -214,11 +215,26 @@ void ASoul_and_dungeonCharacter::Tick(float DeltaTime)
 		HitReactionOverlayWeight = HitReactionOverlayWeightTarget;
 	}
 
+	const FVector ActorLocation = GetActorLocation();
+	if (!bHasStableMinimapCenterLocation || !bIsAttacking)
+	{
+		StableMinimapCenterLocation = ActorLocation;
+		bHasStableMinimapCenterLocation = true;
+	}
+
+	const FVector MinimapCenterLocation = StableMinimapCenterLocation;
+
+	if (MinimapBoom)
+	{
+		MinimapBoom->SetWorldLocation(MinimapCenterLocation + FVector(0.0f, 0.0f, MinimapCaptureHeight));
+		MinimapBoom->SetWorldRotation(FRotator(-90.0f, 0.0f, 0.0f));
+	}
+
 	// Update minimap player marker + scene capture
 	if (MinimapWidget)
 	{
 		// Pass character rotation for the arrow, and control rotation (mouse/camera) for map alignment
-		MinimapWidget->UpdatePlayerState(GetActorLocation(), GetActorRotation().Yaw, GetControlRotation().Yaw);
+		MinimapWidget->UpdatePlayerState(MinimapCenterLocation, GetActorRotation().Yaw, GetControlRotation().Yaw);
 	}
 
 	// Throttle minimap scene capture to ~10fps for performance
@@ -228,10 +244,6 @@ void ASoul_and_dungeonCharacter::Tick(float DeltaTime)
 		if (MinimapCaptureTimer >= MinimapCaptureInterval)
 		{
 			MinimapCaptureTimer = 0.0f;
-
-			// Update height above player (position still follows character via attachment,
-			// but rotation is completely independent due to bAbsoluteRotation = true)
-			MinimapBoom->SetRelativeLocation(FVector(0.0f, 0.0f, MinimapCaptureHeight));
 
 			// Update ortho width in case it changed
 			MinimapCapture->OrthoWidth = MinimapWorldRadius * 2.0f;
@@ -532,6 +544,32 @@ void ASoul_and_dungeonCharacter::BeginPlay()
 	if (MinimapWidget && MinimapRenderTarget)
 	{
 		MinimapWidget->SetRenderTarget(MinimapRenderTarget);
+	}
+
+	TArray<UStaticMeshComponent*> StaticMeshComponents;
+	GetComponents<UStaticMeshComponent>(StaticMeshComponents);
+	for (UStaticMeshComponent* StaticMeshComponent : StaticMeshComponents)
+	{
+		if (!StaticMeshComponent)
+		{
+			continue;
+		}
+
+		const FString ComponentName = StaticMeshComponent->GetName();
+		const FString MeshName = GetNameSafe(StaticMeshComponent->GetStaticMesh());
+		const bool bLooksLikeWeapon =
+			ComponentName.Contains(TEXT("Sword"), ESearchCase::IgnoreCase) ||
+			ComponentName.Contains(TEXT("Weapon"), ESearchCase::IgnoreCase) ||
+			MeshName.Contains(TEXT("sword"), ESearchCase::IgnoreCase) ||
+			MeshName.Contains(TEXT("weapon"), ESearchCase::IgnoreCase);
+
+		if (bLooksLikeWeapon)
+		{
+			StaticMeshComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			StaticMeshComponent->SetCollisionResponseToAllChannels(ECR_Ignore);
+			StaticMeshComponent->SetGenerateOverlapEvents(false);
+			StaticMeshComponent->SetCanEverAffectNavigation(false);
+		}
 	}
 }
 
