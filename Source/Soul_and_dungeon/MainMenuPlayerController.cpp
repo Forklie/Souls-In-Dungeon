@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MainMenuPlayerController.h"
+#include "MainMenuWidget.h"
 
 AMainMenuPlayerController::AMainMenuPlayerController()
 {
@@ -17,4 +18,17 @@ void AMainMenuPlayerController::BeginPlay()
 	FInputModeUIOnly InputMode;
 	InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 	SetInputMode(InputMode);
+
+	if (IsLocalPlayerController())
+	{
+		UMainMenuWidget* MainMenuWidget = CreateWidget<UMainMenuWidget>(this, UMainMenuWidget::StaticClass());
+		if (MainMenuWidget)
+		{
+			MainMenuWidget->AddToViewport(100);
+			FInputModeUIOnly MenuInputMode;
+			MenuInputMode.SetWidgetToFocus(MainMenuWidget->TakeWidget());
+			MenuInputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+			SetInputMode(MenuInputMode);
+		}
+	}
 }

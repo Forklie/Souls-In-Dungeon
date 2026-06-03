@@ -1668,11 +1668,6 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 		RebuildDebugBaseGrid(AI->GetActorLocation(), EffectiveSearchSettings);
 	}
 
-	const float DistToPlayer = FVector::Dist(AI->GetActorLocation(), Player->GetActorLocation());
-	EffectiveSearchSettings.MaxSearchDistance = FMath::Max(EffectiveSearchSettings.MaxSearchDistance, DistToPlayer * 3.0f + 2000.0f);
-	const int32 RequiredNodes = FMath::Clamp(FMath::CeilToInt(FMath::Square(DistToPlayer / EffectiveSearchSettings.CellSize) * 0.1f), 10000, 100000);
-	EffectiveSearchSettings.MaxExpandedNodes = FMath::Max(EffectiveSearchSettings.MaxExpandedNodes, RequiredNodes);
-
 	const FVector SearchStartLocation = AI->GetActorLocation();
 	const FVector SearchGoalLocation = Player->GetActorLocation();
 
@@ -1762,7 +1757,43 @@ void AMyAIController::UpdateSecondarySearchDebug(APawn* AI, APawn* Player, float
 	LastSearchResult.Path = MovementPath;
 	LastSearchResult.PreviewPath = MovementPath;
 
-	LastSearchResult.SampledNodes = bOwnsSharedBaseGrid ? DebugBaseGridNodes : TArray<FVector>();
+	TArray<FVector> VisualSeedNodes = LastSearchResult.SampledNodes;
+	if (bOwnsSharedBaseGrid && FSecondarySearchDebug::ShouldShowBaseGrid() && DebugBaseGridNodes.Num() > 0)
+	{
+		TSet<FIntVector> SeenSeedCells;
+		SeenSeedCells.Reserve(VisualSeedNodes.Num() + DebugBaseGridNodes.Num());
+		for (const FVector& NodeLocation : VisualSeedNodes)
+		{
+			SeenSeedCells.Add(FIntVector(
+				FMath::RoundToInt(NodeLocation.X / EffectiveSearchSettings.CellSize),
+				FMath::RoundToInt(NodeLocation.Y / EffectiveSearchSettings.CellSize),
+				FMath::RoundToInt(NodeLocation.Z / EffectiveSearchSettings.CellSize)));
+		}
+
+		VisualSeedNodes.Reserve(FMath::Min(
+			VisualSeedNodes.Num() + DebugBaseGridNodes.Num(),
+			EffectiveSearchSettings.MaxDebugDrawNodes));
+		for (const FVector& NodeLocation : DebugBaseGridNodes)
+		{
+			if (VisualSeedNodes.Num() >= EffectiveSearchSettings.MaxDebugDrawNodes)
+			{
+				break;
+			}
+
+			const FIntVector NodeKey(
+				FMath::RoundToInt(NodeLocation.X / EffectiveSearchSettings.CellSize),
+				FMath::RoundToInt(NodeLocation.Y / EffectiveSearchSettings.CellSize),
+				FMath::RoundToInt(NodeLocation.Z / EffectiveSearchSettings.CellSize));
+			if (SeenSeedCells.Contains(NodeKey))
+			{
+				continue;
+			}
+
+			SeenSeedCells.Add(NodeKey);
+			VisualSeedNodes.Add(NodeLocation);
+		}
+	}
+	LastSearchResult.SampledNodes = MoveTemp(VisualSeedNodes);
 	LastSearchResult.StartLocation = AI->GetActorLocation();
 	LastSearchResult.GoalLocation = Player->GetActorLocation();
 	LastSearchResult.CurrentTarget = LastActivePathTarget.IsNearlyZero() ? Player->GetActorLocation() : LastActivePathTarget;
@@ -1827,7 +1858,7 @@ FSecondarySearchSettings AMyAIController::BuildSecondarySearchSettings() const
 {
 	FSecondarySearchSettings Settings = SecondarySearchSettings;
 	Settings.CellSize = FMath::Clamp(FSecondarySearchDebug::GetCellSize(), 20.0f, 200.0f);
-	Settings.MaxSearchDistance = FMath::Clamp(FSecondarySearchDebug::GetFieldRadius(), 1000.0f, 8000.0f);
+	Settings.MaxSearchDistance = FMath::Clamp(FSecondarySearchDebug::GetFieldRadius(), 600.0f, 8000.0f);
 	const float ProjectionRadius = FMath::Max(80.0f, Settings.CellSize * 1.25f);
 	Settings.ProjectionExtent = FVector(ProjectionRadius, ProjectionRadius, 650.0f);
 	Settings.GoalAcceptanceRadius = FMath::Max(36.0f, Settings.CellSize * 0.75f);
@@ -1930,6 +1961,7 @@ void AMyAIController::RebuildDebugBaseGrid(const FVector& CenterLocation, const 
 
 	TSet<FIntPoint> SeenCells;
 	DebugBaseGridNodes.Reserve(Settings.MaxDebugDrawNodes);
+	const float MaxRadiusSquared = FMath::Square(Settings.MaxSearchDistance);
 	for (const FBox& Bounds : BoundsList)
 	{
 		for (float X = Bounds.Min.X; X <= Bounds.Max.X && DebugBaseGridNodes.Num() < Settings.MaxDebugDrawNodes; X += SampleSpacing)
@@ -1937,8 +1969,17 @@ void AMyAIController::RebuildDebugBaseGrid(const FVector& CenterLocation, const 
 			for (float Y = Bounds.Min.Y; Y <= Bounds.Max.Y && DebugBaseGridNodes.Num() < Settings.MaxDebugDrawNodes; Y += SampleSpacing)
 			{
 				const FVector Candidate(X, Y, CenterLocation.Z);
+				if (FVector::DistSquared2D(Candidate, CenterLocation) > MaxRadiusSquared)
+				{
+					continue;
+				}
+
 				FNavLocation ProjectedLocation;
 				if (!NavSystem->ProjectPointToNavigation(Candidate, ProjectedLocation, Settings.ProjectionExtent))
+				{
+					continue;
+				}
+				if (FVector::DistSquared2D(ProjectedLocation.Location, CenterLocation) > MaxRadiusSquared)
 				{
 					continue;
 				}

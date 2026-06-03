@@ -401,7 +401,7 @@ void ASecondarySearchVisualizerActor::UpdateBaseGridInstances(const FSecondarySe
 	for (int32 Index = 0; Index < DrawCount; ++Index)
 	{
 		const FVector& Location = Result.SampledNodes[Index];
-		const FIntPoint Key = MakeNodeKey(Location, Settings.CellSize);
+		const FIntVector Key = MakeNodeKey(Location, Settings.CellSize);
 		if (RetainedNodes.Contains(Key))
 		{
 			continue;
@@ -436,7 +436,7 @@ void ASecondarySearchVisualizerActor::UpdateRetainedNodeInstances(const FSeconda
 	const int32 ExpandedDrawCount = FMath::Min(Result.ExpandedNodes.Num(), NodeCap);
 	for (int32 Index = 0; Index < ExpandedDrawCount; ++Index)
 	{
-		const FIntPoint Key = FindRetainedNodeKeyNear(Result.ExpandedNodes[Index], Settings.CellSize);
+		const FIntVector Key = FindRetainedNodeKeyNear(Result.ExpandedNodes[Index], Settings.CellSize);
 		FRetainedNodeRecord* Record = RetainedNodes.Find(Key);
 		if (!Record)
 		{
@@ -473,7 +473,7 @@ void ASecondarySearchVisualizerActor::UpdateRetainedNodeInstances(const FSeconda
 	const int32 FrontierDrawCount = FMath::Min(Result.FrontierNodes.Num(), NodeCap);
 	for (int32 Index = 0; Index < FrontierDrawCount; ++Index)
 	{
-		const FIntPoint Key = FindRetainedNodeKeyNear(Result.FrontierNodes[Index], Settings.CellSize);
+		const FIntVector Key = FindRetainedNodeKeyNear(Result.FrontierNodes[Index], Settings.CellSize);
 		FRetainedNodeRecord* Record = RetainedNodes.Find(Key);
 		if (!Record)
 		{
@@ -640,7 +640,7 @@ void ASecondarySearchVisualizerActor::UpdateFluidAnimation(float DeltaSeconds, f
 		const float InteractionRadiusSq = FMath::Square(InteractionRadius);
 		
 		// Reset nodes that were displaced last frame but are no longer in range
-		for (const FIntPoint& PreviousKey : AnimatedAtomKeys)
+		for (const FIntVector& PreviousKey : AnimatedAtomKeys)
 		{
 			if (FRetainedNodeRecord* Record = RetainedNodes.Find(PreviousKey))
 			{
@@ -703,7 +703,7 @@ void ASecondarySearchVisualizerActor::UpdateFluidAnimation(float DeltaSeconds, f
 		AnimatedAtomKeys.Reset();
 	}
 
-	for (const FIntPoint& Key : RetainedNodeKeys)
+	for (const FIntVector& Key : RetainedNodeKeys)
 	{
 		FRetainedNodeRecord* Record = RetainedNodes.Find(Key);
 		if (!Record)
@@ -1312,36 +1312,41 @@ int32 ASecondarySearchVisualizerActor::AddWorldInstance(UInstancedStaticMeshComp
 	return Component ? Component->AddInstance(WorldTransform, true) : INDEX_NONE;
 }
 
-FIntPoint ASecondarySearchVisualizerActor::MakeNodeKey(const FVector& Location, float CellSize) const
+FIntVector ASecondarySearchVisualizerActor::MakeNodeKey(const FVector& Location, float CellSize) const
 {
 	const float SafeCellSize = FMath::Max(1.0f, CellSize);
-	return FIntPoint(
+	return FIntVector(
 		FMath::RoundToInt(Location.X / SafeCellSize),
-		FMath::RoundToInt(Location.Y / SafeCellSize));
+		FMath::RoundToInt(Location.Y / SafeCellSize),
+		FMath::RoundToInt(Location.Z / SafeCellSize));
 }
 
-FIntPoint ASecondarySearchVisualizerActor::FindRetainedNodeKeyNear(const FVector& Location, float CellSize) const
+FIntVector ASecondarySearchVisualizerActor::FindRetainedNodeKeyNear(const FVector& Location, float CellSize) const
 {
-	const FIntPoint DirectKey = MakeNodeKey(Location, CellSize);
+	const FIntVector DirectKey = MakeNodeKey(Location, CellSize);
 	if (RetainedNodes.Contains(DirectKey))
 	{
 		return DirectKey;
 	}
 
-	FIntPoint BestKey = DirectKey;
-	float BestDistanceSquared = FMath::Square(CellSize * 0.85f);
+	FIntVector BestKey = DirectKey;
+	const float SafeCellSize = FMath::Max(1.0f, CellSize);
+	float BestDistanceSquared = FMath::Square(SafeCellSize * 0.85f) + FMath::Square(SafeCellSize * 1.25f);
 	for (int32 X = -1; X <= 1; ++X)
 	{
 		for (int32 Y = -1; Y <= 1; ++Y)
 		{
-			const FIntPoint CandidateKey(DirectKey.X + X, DirectKey.Y + Y);
-			if (const FRetainedNodeRecord* Record = RetainedNodes.Find(CandidateKey))
+			for (int32 Z = -1; Z <= 1; ++Z)
 			{
-				const float DistanceSquared = FVector::DistSquared2D(Location, Record->Location);
-				if (DistanceSquared < BestDistanceSquared)
+				const FIntVector CandidateKey(DirectKey.X + X, DirectKey.Y + Y, DirectKey.Z + Z);
+				if (const FRetainedNodeRecord* Record = RetainedNodes.Find(CandidateKey))
 				{
-					BestDistanceSquared = DistanceSquared;
-					BestKey = CandidateKey;
+					const float DistanceSquared = FVector::DistSquared(Location, Record->Location);
+					if (DistanceSquared < BestDistanceSquared)
+					{
+						BestDistanceSquared = DistanceSquared;
+						BestKey = CandidateKey;
+					}
 				}
 			}
 		}

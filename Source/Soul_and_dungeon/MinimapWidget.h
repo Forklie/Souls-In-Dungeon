@@ -25,7 +25,7 @@ public:
 	// ── Public API ────────────────────────────────────────────
 	void SetDataProvider(UMinimapDataProvider* InProvider);
 	void SetRenderTarget(UTextureRenderTarget2D* InRT);
-	void UpdatePlayerState(const FVector& WorldPos, float CharacterYawDegrees, float CameraYawDegrees);
+	void UpdatePlayerState(const FVector& WorldPos, float CharacterYawDegrees, float CameraYawDegrees, float WorldRadius = 2500.0f);
 	void RefreshChestStates(class ALevelManager* LevelManager);
 
 protected:
@@ -66,6 +66,7 @@ private:
 	FVector PlayerWorldPos = FVector::ZeroVector;
 	float PlayerYaw = 0.0f;  // Character facing
 	float CameraYaw = 0.0f;  // Camera view direction
+	float ActiveRadarWorldRadius = 2500.0f;
 	float PortalPulseTimer = 0.0f;
 	bool bPopulated = false;
 

@@ -38,15 +38,9 @@ void ALevelChestSpawnDirector::BeginPlay()
 {
 	Super::BeginPlay();
 
-	if (!bEnableChestSpawning)
+	if (!GetWorld() || !SpawnBounds)
 	{
-		UE_LOG(LogSoul_and_dungeon, Log, TEXT("LevelChestSpawnDirector[%s]: chest spawning disabled."), *LevelId.ToString());
-		return;
-	}
-
-	if (!GetWorld() || !ChestClass || !SpawnBounds)
-	{
-		UE_LOG(LogSoul_and_dungeon, Warning, TEXT("LevelChestSpawnDirector[%s]: missing world, chest class, or spawn bounds."), *LevelId.ToString());
+		UE_LOG(LogSoul_and_dungeon, Warning, TEXT("LevelChestSpawnDirector[%s]: missing world or spawn bounds."), *LevelId.ToString());
 		return;
 	}
 
@@ -65,6 +59,45 @@ void ALevelChestSpawnDirector::BeginPlay()
 
 	MinimapData = NewObject<UMinimapDataProvider>(this);
 	MinimapData->RegisterRoomDirect(SpawnBounds->GetComponentLocation(), SpawnBounds->GetScaledBoxExtent(), true, true, false);
+
+	if (!bEnableChestSpawning)
+	{
+		UE_LOG(LogSoul_and_dungeon, Log, TEXT("LevelChestSpawnDirector[%s]: chest spawning disabled. Scanning for manually placed chests."), *LevelId.ToString());
+		
+		TArray<AActor*> AllActors;
+		UGameplayStatics::GetAllActorsOfClass(GetWorld(), AActor::StaticClass(), AllActors);
+		for (AActor* Actor : AllActors)
+		{
+			if (!Actor) continue;
+			bool bIsChest = false;
+			if (ChestClass && (Actor->GetClass() == ChestClass || Actor->GetClass()->IsChildOf(ChestClass)))
+			{
+				bIsChest = true;
+			}
+			else
+			{
+				FString ClassName = Actor->GetClass()->GetName().ToLower();
+				if (ClassName.Contains(TEXT("bp_prop_chest_interactive")))
+				{
+					bIsChest = true;
+				}
+			}
+
+			if (bIsChest)
+			{
+				LevelManager->RegisterChest(Actor);
+				MinimapData->RegisterIcon(Actor, EMinimapIconType::Chest);
+			}
+		}
+
+		return;
+	}
+
+	if (!ChestClass)
+	{
+		UE_LOG(LogSoul_and_dungeon, Warning, TEXT("LevelChestSpawnDirector[%s]: missing chest class."), *LevelId.ToString());
+		return;
+	}
 
 	TArray<FVector> AcceptedFloorLocations;
 	AcceptedFloorLocations.Reserve(ChestCount);

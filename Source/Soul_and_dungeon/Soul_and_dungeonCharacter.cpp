@@ -20,6 +20,7 @@
 #include "Soul_and_dungeon.h"
 #include "Kismet/GameplayStatics.h"
 #include "Blueprint/UserWidget.h"
+#include "GameEndMenuWidget.h"
 #include "InteractPromptWidget.h"
 #include "HealthBarWidget.h"
 #include "MinimapWidget.h"
@@ -35,6 +36,7 @@
 #include "Animation/AnimSequence.h"
 #include "SecondarySearchSolver.h"
 #include "HAL/IConsoleManager.h"
+#include "Engine/OverlapResult.h"
 
 namespace
 {
@@ -235,7 +237,7 @@ void ASoul_and_dungeonCharacter::Tick(float DeltaTime)
 	if (MinimapWidget)
 	{
 		// Pass character rotation for the arrow, and control rotation (mouse/camera) for map alignment
-		MinimapWidget->UpdatePlayerState(MinimapCenterLocation, GetActorRotation().Yaw, GetControlRotation().Yaw);
+		MinimapWidget->UpdatePlayerState(MinimapCenterLocation, GetActorRotation().Yaw, GetControlRotation().Yaw, MinimapWorldRadius);
 	}
 
 	// Throttle minimap scene capture to ~10fps for performance
@@ -252,6 +254,8 @@ void ASoul_and_dungeonCharacter::Tick(float DeltaTime)
 			MinimapCapture->CaptureScene();
 		}
 	}
+
+	UpdateMinimapDynamicIcons(DeltaTime);
 }
 
 void ASoul_and_dungeonCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -404,10 +408,14 @@ void ASoul_and_dungeonCharacter::PerformAttackTrace()
 		return;
 	}
 
-	const FVector TraceStart = GetActorLocation() + FVector(0.0f, 0.0f, 55.0f);
-	const FVector TraceEnd = TraceStart + (GetActorForwardVector() * AttackTraceDistance);
+	const FVector PlayerLoc = GetActorLocation();
+	const FVector PlayerForward = GetActorForwardVector();
 
-	TArray<FHitResult> HitResults;
+	const float MaxHorizontalReach = AttackTraceDistance + AttackTraceRadius;
+	const float MaxVerticalDifference = 250.0f;
+	const float MaxConeHalfAngle = 100.0f; // 200 degrees total cone for very generous swing arcs
+
+	TArray<FOverlapResult> OverlapResults;
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(KinoSwordAttack), false);
 	QueryParams.AddIgnoredActor(this);
 	QueryParams.bFindInitialOverlaps = true;
@@ -415,26 +423,23 @@ void ASoul_and_dungeonCharacter::PerformAttackTrace()
 	FCollisionObjectQueryParams ObjectParams;
 	ObjectParams.AddObjectTypesToQuery(ECC_Pawn);
 
-	const bool bHit = GetWorld()->SweepMultiByObjectType(
-		HitResults,
-		TraceStart,
-		TraceEnd,
+	// Direct spatial query (overlap check) using a vertically-aligned capsule matching our reach and height
+	FCollisionShape CollisionShape = FCollisionShape::MakeCapsule(MaxHorizontalReach, MaxVerticalDifference);
+
+	GetWorld()->OverlapMultiByObjectType(
+		OverlapResults,
+		PlayerLoc,
 		FQuat::Identity,
 		ObjectParams,
-		FCollisionShape::MakeSphere(AttackTraceRadius),
+		CollisionShape,
 		QueryParams);
-
-	if (!bHit)
-	{
-		return;
-	}
 
 	AActor* BestTarget = nullptr;
 	float BestDistanceSq = TNumericLimits<float>::Max();
 
-	for (const FHitResult& Hit : HitResults)
+	for (const FOverlapResult& Overlap : OverlapResults)
 	{
-		APawn* HitPawn = Cast<APawn>(Hit.GetActor());
+		APawn* HitPawn = Cast<APawn>(Overlap.GetActor());
 		if (!HitPawn || HitPawn == this || HitPawn->IsPlayerControlled())
 		{
 			continue;
@@ -445,7 +450,56 @@ void ASoul_and_dungeonCharacter::PerformAttackTrace()
 			continue;
 		}
 
-		const float DistanceSq = FVector::DistSquared(HitPawn->GetActorLocation(), GetActorLocation());
+		const FVector EnemyLoc = HitPawn->GetActorLocation();
+
+		// 1. Vertical difference check
+		const float VerticalDiff = FMath::Abs(EnemyLoc.Z - PlayerLoc.Z);
+		if (VerticalDiff > MaxVerticalDifference)
+		{
+			continue;
+		}
+
+		// 2. Horizontal distance check (accounting for target capsule radius)
+		FVector PlayerToEnemy = EnemyLoc - PlayerLoc;
+		PlayerToEnemy.Z = 0.0f;
+		const float HorizontalDist = PlayerToEnemy.Size();
+
+		float EnemyRadius = 0.0f;
+		if (ACharacter* HitCharacter = Cast<ACharacter>(HitPawn))
+		{
+			if (UCapsuleComponent* EnemyCapsule = HitCharacter->GetCapsuleComponent())
+			{
+				EnemyRadius = EnemyCapsule->GetScaledCapsuleRadius();
+			}
+		}
+
+		if (HorizontalDist > (MaxHorizontalReach + EnemyRadius))
+		{
+			continue;
+		}
+
+		// 3. Horizontal cone angle check (bypassed if extremely close to prevent dead zones)
+		if (HorizontalDist > 100.0f)
+		{
+			FVector PlayerForward2D = PlayerForward;
+			PlayerForward2D.Z = 0.0f;
+
+			if (!PlayerToEnemy.IsNearlyZero() && !PlayerForward2D.IsNearlyZero())
+			{
+				PlayerToEnemy.Normalize();
+				PlayerForward2D.Normalize();
+
+				const float DotProduct = FVector::DotProduct(PlayerForward2D, PlayerToEnemy);
+				const float AngleDegrees = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(DotProduct, -1.0f, 1.0f)));
+
+				if (AngleDegrees > MaxConeHalfAngle)
+				{
+					continue;
+				}
+			}
+		}
+
+		const float DistanceSq = FVector::DistSquared(EnemyLoc, PlayerLoc);
 		if (DistanceSq < BestDistanceSq)
 		{
 			BestDistanceSq = DistanceSq;
@@ -527,7 +581,7 @@ void ASoul_and_dungeonCharacter::BeginPlay()
 		MinimapRenderTarget = NewObject<UTextureRenderTarget2D>(this, TEXT("MinimapRT"));
 		// Set clear color to match the MinimapWidget BgColor so the void blends seamlessly
 		MinimapRenderTarget->ClearColor = FLinearColor(0.005f, 0.005f, 0.015f, 1.0f);
-		MinimapRenderTarget->InitAutoFormat(512, 512);
+		MinimapRenderTarget->InitAutoFormat(1024, 1024);
 		MinimapRenderTarget->UpdateResourceImmediate();
 
 		if (MinimapCapture)
@@ -537,7 +591,7 @@ void ASoul_and_dungeonCharacter::BeginPlay()
 			// Hide the player pawn from the minimap camera
 			MinimapCapture->HiddenActors.Add(this);
 
-			UE_LOG(LogSoul_and_dungeon, Log, TEXT("Minimap: RenderTarget 512x512 created and assigned to SceneCapture."));
+			UE_LOG(LogSoul_and_dungeon, Log, TEXT("Minimap: RenderTarget 1024x1024 created and assigned to SceneCapture."));
 		}
 	}
 
@@ -638,6 +692,7 @@ void ASoul_and_dungeonCharacter::EnsurePlayerHudWidgets()
 					if (Generator && Generator->MinimapData && Generator->MinimapData->HasData())
 					{
 						MinimapWidget->SetDataProvider(Generator->MinimapData);
+						ActiveMinimapDataProvider = Generator->MinimapData;
 						bFoundGenerator = true;
 						break;
 					}
@@ -655,7 +710,16 @@ void ASoul_and_dungeonCharacter::EnsurePlayerHudWidgets()
 					if (Director && Director->GetMinimapDataProvider() && Director->GetMinimapDataProvider()->HasData())
 					{
 						MinimapWidget->SetDataProvider(Director->GetMinimapDataProvider());
+						ActiveMinimapDataProvider = Director->GetMinimapDataProvider();
 						bFoundGenerator = true;
+
+						// Dynamic Zoom & Height Optimization for handcrafted BossRoom!
+						if (Director->GetLevelId() == TEXT("BossRoom"))
+						{
+							MinimapWorldRadius = 1200.0f;
+							MinimapCaptureHeight = 1100.0f; // Below ceiling but above player
+							UE_LOG(LogSoul_and_dungeon, Log, TEXT("EnsurePlayerHudWidgets: BossRoom detected. Zooming in minimap to radius 1200.0 and lowering capture height to 1100.0."));
+						}
 						break;
 					}
 				}
@@ -691,6 +755,7 @@ void ASoul_and_dungeonCharacter::EnsurePlayerHudWidgets()
 				}
 
 				MinimapWidget->SetDataProvider(AutoScanData);
+				ActiveMinimapDataProvider = AutoScanData;
 				UE_LOG(LogSoul_and_dungeon, Log, TEXT("MinimapWidget: Auto-scan radar — %d icons registered"),
 					AutoScanData->GetIcons().Num());
 			}
@@ -1107,31 +1172,92 @@ void ASoul_and_dungeonCharacter::OnDeathMontageEnded()
 {
 	UE_LOG(LogSoul_and_dungeon, Log, TEXT("OnDeathMontageEnded: Showing death screen"));
 
-	// Show the "YOU DIED" restart screen
-	if (UClass* DeathWidgetClass = LoadClass<UUserWidget>(nullptr, TEXT("/Game/ThirdPerson/UI/WBP_DeathScreen.WBP_DeathScreen_C")))
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (PC)
 	{
-		APlayerController* PC = Cast<APlayerController>(GetController());
-		if (PC)
+		UGameEndMenuWidget* DeathWidget = CreateWidget<UGameEndMenuWidget>(PC, UGameEndMenuWidget::StaticClass());
+		if (DeathWidget)
 		{
-			UUserWidget* DeathWidget = CreateWidget<UUserWidget>(PC, DeathWidgetClass);
-			if (DeathWidget)
-			{
-				DeathWidget->AddToViewport(100);
-			}
-
-			// Show mouse cursor and set UI input mode
-			PC->bShowMouseCursor = true;
-			FInputModeUIOnly UIMode;
-			if (DeathWidget)
-			{
-				UIMode.SetWidgetToFocus(DeathWidget->TakeWidget());
-			}
-			PC->SetInputMode(UIMode);
+			DeathWidget->ConfigureForDeath();
+			DeathWidget->AddToViewport(100);
 		}
+
+		// Show mouse cursor and set UI input mode
+		PC->bShowMouseCursor = true;
+		FInputModeUIOnly UIMode;
+		if (DeathWidget)
+		{
+			UIMode.SetWidgetToFocus(DeathWidget->TakeWidget());
+		}
+		PC->SetInputMode(UIMode);
 	}
 }
 
 void ASoul_and_dungeonCharacter::CycleSearchAlgorithm()
 {
 	FSecondarySearchDebug::CycleMode();
+}
+
+void ASoul_and_dungeonCharacter::UpdateMinimapDynamicIcons(float DeltaTime)
+{
+	if (!ActiveMinimapDataProvider.IsValid() || !GetWorld())
+	{
+		return;
+	}
+
+	DynamicIconUpdateTimer += DeltaTime;
+	if (DynamicIconUpdateTimer < DynamicIconUpdateInterval)
+	{
+		return;
+	}
+	DynamicIconUpdateTimer = 0.0f;
+
+	UMinimapDataProvider* Provider = ActiveMinimapDataProvider.Get();
+	TArray<FMinimapIconData>& Icons = Provider->GetIconsMutable();
+
+	// 1. Remove dead or destroyed enemies from the icon list
+	for (int32 i = Icons.Num() - 1; i >= 0; --i)
+	{
+		if (Icons[i].IconType == EMinimapIconType::Enemy)
+		{
+			AActor* Tracked = Icons[i].TrackedActor.Get();
+			if (!Tracked || Tracked->IsPendingKillPending() || Tracked->ActorHasTag(TEXT("Dead")))
+			{
+				Icons.RemoveAt(i);
+			}
+		}
+	}
+
+	// 2. Scan the level for all active enemies
+	TArray<AActor*> Skeletons;
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), APawn::StaticClass(), Skeletons);
+
+	for (AActor* Actor : Skeletons)
+	{
+		if (!Actor || Actor == this || Actor->ActorHasTag(TEXT("Dead")))
+		{
+			continue;
+		}
+
+		FString ActorName = Actor->GetClass()->GetName();
+		if (ActorName.Contains(TEXT("Skeleton"), ESearchCase::IgnoreCase) ||
+			ActorName.Contains(TEXT("Enemy"), ESearchCase::IgnoreCase))
+		{
+			// Check if already registered
+			bool bAlreadyRegistered = false;
+			for (const FMinimapIconData& Icon : Icons)
+			{
+				if (Icon.TrackedActor.Get() == Actor)
+				{
+					bAlreadyRegistered = true;
+					break;
+				}
+			}
+
+			if (!bAlreadyRegistered)
+			{
+				Provider->RegisterIcon(Actor, EMinimapIconType::Enemy);
+			}
+		}
+	}
 }

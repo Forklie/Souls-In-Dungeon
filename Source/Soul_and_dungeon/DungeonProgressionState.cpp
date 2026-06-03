@@ -3,6 +3,7 @@
 #include "Kismet/KismetSystemLibrary.h"
 #include "Kismet/GameplayStatics.h"
 #include "Blueprint/UserWidget.h"
+#include "GameEndMenuWidget.h"
 
 ADungeonProgressionState::ADungeonProgressionState()
 {
@@ -129,24 +130,21 @@ void ADungeonProgressionState::CompleteGame()
     {
         PC->SetPause(true);
 
-        // Show the "YOU WON" victory screen
-        if (UClass* WinWidgetClass = LoadClass<UUserWidget>(nullptr, TEXT("/Game/ThirdPerson/UI/WBP_WinScreen.WBP_WinScreen_C")))
+        UGameEndMenuWidget* WinWidget = CreateWidget<UGameEndMenuWidget>(PC, UGameEndMenuWidget::StaticClass());
+        if (WinWidget)
         {
-            UUserWidget* WinWidget = CreateWidget<UUserWidget>(PC, WinWidgetClass);
-            if (WinWidget)
-            {
-                WinWidget->AddToViewport(100);
-            }
-
-            // Show mouse cursor and set UI input mode
-            PC->bShowMouseCursor = true;
-            FInputModeUIOnly UIMode;
-            if (WinWidget)
-            {
-                UIMode.SetWidgetToFocus(WinWidget->TakeWidget());
-            }
-            PC->SetInputMode(UIMode);
+            WinWidget->ConfigureForVictory();
+            WinWidget->AddToViewport(100);
         }
+
+        // Show mouse cursor and set UI input mode
+        PC->bShowMouseCursor = true;
+        FInputModeUIOnly UIMode;
+        if (WinWidget)
+        {
+            UIMode.SetWidgetToFocus(WinWidget->TakeWidget());
+        }
+        PC->SetInputMode(UIMode);
     }
 }
 

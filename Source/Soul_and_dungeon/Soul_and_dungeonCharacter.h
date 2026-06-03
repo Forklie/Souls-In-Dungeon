@@ -14,6 +14,7 @@ class UInputAction;
 class UInteractPromptWidget;
 class UHealthBarWidget;
 class UMinimapWidget;
+class UMinimapDataProvider;
 class ALevelManager;
 class USoundBase;
 class UAnimMontage;
@@ -241,6 +242,11 @@ private:
 
 	bool bHealthBarLoadWarningLogged = false;
 	mutable TWeakObjectPtr<ALevelManager> CachedLevelManager;
+
+	TWeakObjectPtr<UMinimapDataProvider> ActiveMinimapDataProvider;
+	void UpdateMinimapDynamicIcons(float DeltaTime);
+	float DynamicIconUpdateInterval = 0.2f;
+	float DynamicIconUpdateTimer = 0.0f;
 
 public:
 

@@ -19,6 +19,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Level Chests")
 	UMinimapDataProvider* GetMinimapDataProvider() const { return MinimapData; }
 
+	UFUNCTION(BlueprintPure, Category = "Level Chests")
+	FName GetLevelId() const { return LevelId; }
+
 protected:
 	virtual void BeginPlay() override;
 

@@ -142,8 +142,8 @@ private:
 	FTransform MakeTubeTransform(const FVector& Start, const FVector& End, float Radius, float ZOffset) const;
 	FTransform MakeHiddenTransform() const;
 	int32 AddWorldInstance(UInstancedStaticMeshComponent* Component, const FTransform& WorldTransform) const;
-	FIntPoint MakeNodeKey(const FVector& Location, float CellSize) const;
-	FIntPoint FindRetainedNodeKeyNear(const FVector& Location, float CellSize) const;
+	FIntVector MakeNodeKey(const FVector& Location, float CellSize) const;
+	FIntVector FindRetainedNodeKeyNear(const FVector& Location, float CellSize) const;
 	bool ArePathsEquivalent(const TArray<FVector>& A, const TArray<FVector>& B) const;
 	float SmoothStep01(float Value) const;
 	float EaseOutCubic(float Value) const;
@@ -237,9 +237,9 @@ private:
 	UPROPERTY()
 	TArray<TObjectPtr<UMaterialInstanceDynamic>> PathLayerMaterials;
 
-	TMap<FIntPoint, FRetainedNodeRecord> RetainedNodes;
-	TArray<FIntPoint> RetainedNodeKeys;
-	TSet<FIntPoint> AnimatedAtomKeys;
+	TMap<FIntVector, FRetainedNodeRecord> RetainedNodes;
+	TArray<FIntVector> RetainedNodeKeys;
+	TSet<FIntVector> AnimatedAtomKeys;
 	TArray<FPathLayer> PathLayers;
 	TArray<FVector> LastSuccessfulPath;
 	TArray<FVector> LastPreviewPath;

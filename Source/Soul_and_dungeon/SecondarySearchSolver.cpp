@@ -487,7 +487,7 @@ namespace SecondarySearchDebugState
 	static float NodeSoftness = 0.75f;
 	static float CellSize = 28.0f;
 	static float NodeScale = 0.24f;
-	static float FieldRadius = 4000.0f;
+	static float FieldRadius = 1800.0f;
 	static float TargetSmoothing = 18.0f;
 
 	static void ToggleCommand()
@@ -656,7 +656,7 @@ namespace SecondarySearchDebugState
 	static FAutoConsoleCommand CellSizeConsoleCommand(TEXT("sd.SearchDebug.CellSize"), TEXT("Usage: sd.SearchDebug.CellSize 28."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, CellSize, 20.0f, 200.0f, TEXT("Secondary search cell size")); }));
 	static FAutoConsoleCommand NodeScaleConsoleCommand(TEXT("sd.SearchDebug.NodeScale"), TEXT("Usage: sd.SearchDebug.NodeScale 0.24."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, NodeScale, 0.12f, 1.25f, TEXT("Secondary search node scale")); }));
 	static FAutoConsoleCommand ShowBaseGridConsoleCommand(TEXT("sd.SearchDebug.ShowBaseGrid"), TEXT("Usage: sd.SearchDebug.ShowBaseGrid 1."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { BoolCommand(Args, bShowBaseGrid, TEXT("Secondary search base grid")); }));
-	static FAutoConsoleCommand FieldRadiusConsoleCommand(TEXT("sd.SearchDebug.FieldRadius"), TEXT("Usage: sd.SearchDebug.FieldRadius 4000."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, FieldRadius, 1000.0f, 50000.0f, TEXT("Secondary search field radius")); }));
+	static FAutoConsoleCommand FieldRadiusConsoleCommand(TEXT("sd.SearchDebug.FieldRadius"), TEXT("Usage: sd.SearchDebug.FieldRadius 1800."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, FieldRadius, 600.0f, 50000.0f, TEXT("Secondary search field radius")); }));
 	static FAutoConsoleCommand TargetSmoothingConsoleCommand(TEXT("sd.SearchDebug.TargetSmoothing"), TEXT("Usage: sd.SearchDebug.TargetSmoothing 18."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, TargetSmoothing, 1.0f, 40.0f, TEXT("Secondary search target smoothing")); }));
 	static FAutoConsoleCommand StyleConsoleCommand(TEXT("sd.SearchDebug.Style"), TEXT("Usage: sd.SearchDebug.Style Simple or Fluid."), FConsoleCommandWithArgsDelegate::CreateStatic(&StyleCommand));
 	static FAutoConsoleCommand SpeedConsoleCommand(TEXT("sd.SearchDebug.Speed"), TEXT("Usage: sd.SearchDebug.Speed 1.0."), FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args) { FloatCommand(Args, VisualSpeed, 0.1f, 5.0f, TEXT("Secondary search visual speed")); }));

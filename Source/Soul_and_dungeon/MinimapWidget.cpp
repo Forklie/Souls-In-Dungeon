@@ -33,7 +33,7 @@ void UMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 	{
 		FSlateBrush RTBrush;
 		RTBrush.SetResourceObject(RenderTarget);
-		RTBrush.ImageSize = FVector2D(512, 512);
+		RTBrush.ImageSize = FVector2D(1024, 1024);
 		RTBrush.DrawAs = ESlateBrushDrawType::Image;
 		RTBrush.TintColor = FSlateColor(FLinearColor::White);
 		MapImage->SetBrush(RTBrush);
@@ -77,11 +77,12 @@ void UMinimapWidget::SetRenderTarget(UTextureRenderTarget2D* InRT)
 		InRT ? TEXT("valid") : TEXT("null"));
 }
 
-void UMinimapWidget::UpdatePlayerState(const FVector& WorldPos, float CharacterYawDegrees, float CameraYawDegrees)
+void UMinimapWidget::UpdatePlayerState(const FVector& WorldPos, float CharacterYawDegrees, float CameraYawDegrees, float WorldRadius)
 {
 	PlayerWorldPos = WorldPos;
 	PlayerYaw = CharacterYawDegrees;
 	CameraYaw = CameraYawDegrees;
+	ActiveRadarWorldRadius = WorldRadius;
 }
 
 void UMinimapWidget::RefreshChestStates(ALevelManager* LevelManager)
@@ -294,12 +295,14 @@ void UMinimapWidget::UpdateRadarIcons()
 			FVector2D(PlayerWorldPos.X, PlayerWorldPos.Y),
 			FVector2D(IconWorldPos.X, IconWorldPos.Y));
 
+		const float CurrentRadius = ActiveRadarWorldRadius > 0.0f ? ActiveRadarWorldRadius : RadarWorldRadius;
+
 		// Filter by type-specific radius
 		if (Icon.IconType == EMinimapIconType::Chest || Icon.IconType == EMinimapIconType::ChestOpened)
 		{
-			if (DistXY > ChestDetectionRadius) continue;
+			if (DistXY > CurrentRadius) continue;
 		}
-		else if (DistXY > RadarWorldRadius) 
+		else if (DistXY > CurrentRadius) 
 		{
 			continue;
 		}
@@ -334,7 +337,7 @@ void UMinimapWidget::UpdateRadarIcons()
 		}
 
 		// Fade icons near the edge
-		float EdgeFade = 1.0f - FMath::Clamp((DistXY / RadarWorldRadius - 0.7f) / 0.3f, 0.0f, 1.0f);
+		float EdgeFade = 1.0f - FMath::Clamp((DistXY / CurrentRadius - 0.7f) / 0.3f, 0.0f, 1.0f);
 		VI.Color.A *= EdgeFade;
 
 		Visible.Add(VI);
@@ -463,7 +466,8 @@ FVector2D UMinimapWidget::WorldToRadar(const FVector& WorldPos) const
 	// Therefore, the edge of the RotatingCanvas corresponds to RadarWorldRadius.
 	float RotSize = ContainerSize * 1.42f;
 	float HalfSize = RotSize * 0.5f;
-	float ScaleFactor = HalfSize / RadarWorldRadius;
+	float CurrentRadius = ActiveRadarWorldRadius > 0.0f ? ActiveRadarWorldRadius : RadarWorldRadius;
+	float ScaleFactor = HalfSize / CurrentRadius;
 
 	// UE: X = forward, Y = right
 	// Minimap pixels: +X = right, +Y = down
