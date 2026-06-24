@@ -8,6 +8,7 @@
 #include "CombatDamageable.h"
 #include "Animation/AnimMontage.h"
 #include "Engine/TimerHandle.h"
+#include "Components/AudioComponent.h"
 #include "CombatEnemy.generated.h"
 
 class UWidgetComponent;
@@ -35,6 +36,10 @@ class ACombatEnemy : public ACharacter, public ICombatAttacker, public ICombatDa
 	/** Life bar widget component */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
 	UWidgetComponent* LifeBar;
+
+	/** Audio component for chase sound loop */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Audio", meta = (AllowPrivateAccess = "true"))
+	UAudioComponent* ChaseAudioComponent;
 
 public:
 	
@@ -169,6 +174,9 @@ public:
 
 	/** Returns the last game time we were attacked */
 	float GetLastDangerTime() const;
+
+	/** Toggles the chase sound loop */
+	void SetChasing(bool bChasing);
 
 public:
 

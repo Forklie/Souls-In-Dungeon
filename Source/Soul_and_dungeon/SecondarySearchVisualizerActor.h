@@ -115,7 +115,7 @@ private:
 	void UpdateRetainedNodeInstances(const FSecondarySearchResult& Result, const FSecondarySearchSettings& Settings, int32 NodeCap, float WorldSeconds);
 	void UpdateEndpointMarkers(const FSecondarySearchResult& Result, const FSecondarySearchSettings& Settings);
 	void UpdateSimplePathInstances(const FSecondarySearchResult& Result, const FSecondarySearchSettings& Settings);
-	void UpdatePreviewPathInstances(const FSecondarySearchResult& Result, const FSecondarySearchSettings& Settings, float WorldSeconds);
+	void UpdatePreviewPathInstances(const FSecondarySearchResult& Result, const FSecondarySearchSettings& Settings, float WorldSeconds, bool bTrailsEnabled);
 	void UpdateStatusHud(const FSecondarySearchResult& Result) const;
 	void UpdateFluidAnimation(float DeltaSeconds, float WorldSeconds);
 	void UpdatePathLayers(float DeltaSeconds, float WorldSeconds);
@@ -136,14 +136,14 @@ private:
 	USplineMeshComponent* AcquirePathSpline();
 	void ReleasePathSpline(USplineMeshComponent* Spline);
 	void ConfigurePathSpline(USplineMeshComponent* Spline, UMaterialInterface* Material, float Radius) const;
-	void SetSplineSegment(USplineMeshComponent* Spline, const FVector& Start, const FVector& End, float Radius, bool bVisible) const;
+	void SetSplineSegment(USplineMeshComponent* Spline, const FVector& Start, const FVector& End, float Radius, bool bVisible, float ExtraZOffset = 0.0f) const;
 	FTransform MakeDiskTransform(const FVector& Location, float Radius, float Height, float ZOffset) const;
 	FTransform MakeSphereTransform(const FVector& Location, float Radius, float ZOffset) const;
 	FTransform MakeTubeTransform(const FVector& Start, const FVector& End, float Radius, float ZOffset) const;
 	FTransform MakeHiddenTransform() const;
 	int32 AddWorldInstance(UInstancedStaticMeshComponent* Component, const FTransform& WorldTransform) const;
-	FIntPoint MakeNodeKey(const FVector& Location, float CellSize) const;
-	FIntPoint FindRetainedNodeKeyNear(const FVector& Location, float CellSize) const;
+	FIntVector MakeNodeKey(const FVector& Location, float CellSize) const;
+	FIntVector FindRetainedNodeKeyNear(const FVector& Location, float CellSize) const;
 	bool ArePathsEquivalent(const TArray<FVector>& A, const TArray<FVector>& B) const;
 	float SmoothStep01(float Value) const;
 	float EaseOutCubic(float Value) const;
@@ -237,9 +237,9 @@ private:
 	UPROPERTY()
 	TArray<TObjectPtr<UMaterialInstanceDynamic>> PathLayerMaterials;
 
-	TMap<FIntPoint, FRetainedNodeRecord> RetainedNodes;
-	TArray<FIntPoint> RetainedNodeKeys;
-	TSet<FIntPoint> AnimatedAtomKeys;
+	TMap<FIntVector, FRetainedNodeRecord> RetainedNodes;
+	TArray<FIntVector> RetainedNodeKeys;
+	TSet<FIntVector> AnimatedAtomKeys;
 	TArray<FPathLayer> PathLayers;
 	TArray<FVector> LastSuccessfulPath;
 	TArray<FVector> LastPreviewPath;
@@ -276,6 +276,7 @@ private:
 	float CachedNodeSoftness = 0.75f;
 	float CachedTargetSmoothing = 18.0f;
 	float CachedTargetZOffset = 80.0f;
+	float CachedPathTubeRadius = 5.0f;
 	float LastNodeUpdateSeconds = 0.0f;
 	int32 LastVisualizationRevision = -1;
 	int32 LastSearchGeneration = -1;

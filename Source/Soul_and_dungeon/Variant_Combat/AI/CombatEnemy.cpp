@@ -11,6 +11,8 @@
 #include "TimerManager.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Animation/AnimInstance.h"
+#include "LevelManager.h"
+#include "Kismet/GameplayStatics.h"
 
 ACombatEnemy::ACombatEnemy()
 {
@@ -50,6 +52,14 @@ void ACombatEnemy::DoAIComboAttack()
 		return;
 	}
 
+	if (ALevelManager* LevelManager = ALevelManager::GetActiveLevelManager(this))
+	{
+		if (LevelManager->IsObjectiveComplete())
+		{
+			return;
+		}
+	}
+
 	// raise the attacking flag
 	bIsAttacking = true;
 
@@ -79,6 +89,14 @@ void ACombatEnemy::DoAIChargedAttack()
 	if (bIsAttacking)
 	{
 		return;
+	}
+
+	if (ALevelManager* LevelManager = ALevelManager::GetActiveLevelManager(this))
+	{
+		if (LevelManager->IsObjectiveComplete())
+		{
+			return;
+		}
 	}
 
 	// raise the attacking flag
@@ -247,7 +265,7 @@ void ACombatEnemy::HandleDeath()
 	OnEnemyDied.Broadcast();
 
 	// set up the death timer
-	GetWorld()->GetTimerManager().SetTimer(DeathTimer, this, &ACombatEnemy::RemoveFromLevel, DeathRemovalTime);
+	// GetWorld()->GetTimerManager().SetTimer(DeathTimer, this, &ACombatEnemy::RemoveFromLevel, DeathRemovalTime);
 }
 
 void ACombatEnemy::ApplyHealing(float Healing, AActor* Healer)

@@ -7,6 +7,7 @@
 #include "Soul_and_dungeonPlayerController.generated.h"
 
 class UInputMappingContext;
+class UPauseMenuWidget;
 class UUserWidget;
 
 /**
@@ -36,6 +37,10 @@ protected:
 	UPROPERTY()
 	TObjectPtr<UUserWidget> MobileControlsWidget;
 
+	/** Pointer to the active pause menu widget */
+	UPROPERTY(Transient)
+	TObjectPtr<UPauseMenuWidget> PauseMenuWidget;
+
 	/** If true, the player will use UMG touch controls even if not playing on mobile platforms */
 	UPROPERTY(EditAnywhere, Config, Category = "Input|Touch Controls")
 	bool bForceTouchControls = false;
@@ -48,6 +53,21 @@ protected:
 
 	/** Toggle secondary search debug drawing */
 	void ToggleSecondarySearchDebug();
+
+	/** Toggle enemy intercept prediction between off and deterministic prediction */
+	void ToggleEnemyInterceptPrediction();
+
+	/** Cycle enemy intercept mode */
+	void CycleEnemyInterceptMode();
+
+	/** Opens or closes the in-game pause menu */
+	UFUNCTION(BlueprintCallable, Category = "Souls|UI")
+	void TogglePauseMenu();
+
+public:
+	/** Closes the pause menu and returns to gameplay input */
+	UFUNCTION(BlueprintCallable, Category = "Souls|UI")
+	void ClosePauseMenu();
 
 	/** Returns true if the player should use UMG touch controls */
 	bool ShouldUseTouchControls() const;

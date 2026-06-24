@@ -101,6 +101,7 @@ struct FSecondarySearchResult
 	int32 VisualizationRevision = 0;
 	int32 SearchGeneration = 0;
 	TArray<FSecondarySearchVisualEvent> VisualEvents;
+
 };
 
 struct FSecondarySearchNodeRecord
@@ -117,9 +118,15 @@ struct FSecondarySearchOpenItem
 	int32 TieBreaker = 0;
 };
 
-class FSecondarySearchSolver
+class SOUL_AND_DUNGEON_API FSecondarySearchSolver
 {
 public:
+	static bool ProjectPointToWalkable(
+		UWorld* World,
+		const FVector& Candidate,
+		const FSecondarySearchSettings& Settings,
+		FVector& OutLocation);
+
 	static FSecondarySearchResult FindPath(
 		UWorld* World,
 		const FVector& Start,
@@ -173,6 +180,7 @@ public:
 	static void Toggle();
 	static ESecondarySearchMode GetMode();
 	static void SetMode(ESecondarySearchMode Mode);
+	static void CycleMode();
 	static int32 GetRevision();
 	static bool ConsumeClearRequested();
 	static bool IsXRayEnabled();

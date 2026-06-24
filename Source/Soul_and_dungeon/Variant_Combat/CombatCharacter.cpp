@@ -15,6 +15,7 @@
 #include "TimerManager.h"
 #include "Engine/LocalPlayer.h"
 #include "CombatPlayerController.h"
+#include "Engine/OverlapResult.h"
 
 ACombatCharacter::ACombatCharacter()
 {
@@ -254,45 +255,116 @@ void ACombatCharacter::AttackMontageEnded(UAnimMontage* Montage, bool bInterrupt
 
 void ACombatCharacter::DoAttackTrace(FName DamageSourceBone)
 {
-	// sweep for objects in front of the character to be hit by the attack
-	TArray<FHitResult> OutHits;
+	TArray<FOverlapResult> OverlapResults;
 
-	// start at the provided socket location, sweep forward
-	const FVector TraceStart = GetMesh()->GetSocketLocation(DamageSourceBone);
-	const FVector TraceEnd = TraceStart + (GetActorForwardVector() * MeleeTraceDistance);
+	const FVector PlayerLoc = GetActorLocation();
+	const FVector PlayerForward = GetActorForwardVector();
+
+	const float MaxHorizontalReach = MeleeTraceDistance + MeleeTraceRadius;
+	const float MaxVerticalDifference = 250.0f;
+	const float MaxConeHalfAngle = 100.0f; // 200 degrees total cone for very generous swing arcs
 
 	// check for pawn and world dynamic collision object types
 	FCollisionObjectQueryParams ObjectParams;
 	ObjectParams.AddObjectTypesToQuery(ECC_Pawn);
 	ObjectParams.AddObjectTypesToQuery(ECC_WorldDynamic);
 
-	// use a sphere shape for the sweep
-	FCollisionShape CollisionShape;
-	CollisionShape.SetSphere(MeleeTraceRadius);
+	// use a vertically-aligned capsule matching our maximum horizontal reach and vertical height
+	FCollisionShape CollisionShape = FCollisionShape::MakeCapsule(MaxHorizontalReach, MaxVerticalDifference);
 
 	// ignore self
 	FCollisionQueryParams QueryParams;
 	QueryParams.AddIgnoredActor(this);
 
-	if (GetWorld()->SweepMultiByObjectType(OutHits, TraceStart, TraceEnd, FQuat::Identity, ObjectParams, CollisionShape, QueryParams))
+	if (GetWorld()->OverlapMultiByObjectType(OverlapResults, PlayerLoc, FQuat::Identity, ObjectParams, CollisionShape, QueryParams))
 	{
+		// Keep track of actors we've already hit in this trace to avoid duplicate damage
+		TSet<AActor*> HitActors;
+
 		// iterate over each object hit
-		for (const FHitResult& CurrentHit : OutHits)
+		for (const FOverlapResult& Overlap : OverlapResults)
 		{
-			// check if we've hit a damageable actor
-			ICombatDamageable* Damageable = Cast<ICombatDamageable>(CurrentHit.GetActor());
-
-			if (Damageable)
+			AActor* HitActor = Overlap.GetActor();
+			if (!HitActor || HitActor == this || HitActors.Contains(HitActor))
 			{
-				// knock upwards and away from the impact normal
-				const FVector Impulse = (CurrentHit.ImpactNormal * -MeleeKnockbackImpulse) + (FVector::UpVector * MeleeLaunchImpulse);
-
-				// pass the damage event to the actor
-				Damageable->ApplyDamage(MeleeDamage, this, CurrentHit.ImpactPoint, Impulse);
-
-				// call the BP handler to play effects, etc.
-				DealtDamage(MeleeDamage, CurrentHit.ImpactPoint);
+				continue;
 			}
+
+			// check if we've hit a damageable actor
+			ICombatDamageable* Damageable = Cast<ICombatDamageable>(HitActor);
+			if (!Damageable)
+			{
+				continue;
+			}
+
+			const FVector EnemyLoc = HitActor->GetActorLocation();
+
+			// 1. Vertical difference check
+			const float VerticalDiff = FMath::Abs(EnemyLoc.Z - PlayerLoc.Z);
+			if (VerticalDiff > MaxVerticalDifference)
+			{
+				continue;
+			}
+
+			// 2. Horizontal distance check (accounting for target capsule radius)
+			FVector PlayerToEnemy = EnemyLoc - PlayerLoc;
+			PlayerToEnemy.Z = 0.0f;
+			const float HorizontalDist = PlayerToEnemy.Size();
+
+			float EnemyRadius = 0.0f;
+			if (ACharacter* HitCharacter = Cast<ACharacter>(HitActor))
+			{
+				if (UCapsuleComponent* EnemyCapsule = HitCharacter->GetCapsuleComponent())
+				{
+					EnemyRadius = EnemyCapsule->GetScaledCapsuleRadius();
+				}
+			}
+
+			if (HorizontalDist > (MaxHorizontalReach + EnemyRadius))
+			{
+				continue;
+			}
+
+			// 3. Horizontal cone angle check (bypassed if extremely close to prevent dead zones)
+			if (HorizontalDist > 100.0f)
+			{
+				FVector PlayerForward2D = PlayerForward;
+				PlayerForward2D.Z = 0.0f;
+
+				if (!PlayerToEnemy.IsNearlyZero() && !PlayerForward2D.IsNearlyZero())
+				{
+					PlayerToEnemy.Normalize();
+					PlayerForward2D.Normalize();
+
+					const float DotProduct = FVector::DotProduct(PlayerForward2D, PlayerToEnemy);
+					const float AngleDegrees = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(DotProduct, -1.0f, 1.0f)));
+
+					if (AngleDegrees > MaxConeHalfAngle)
+					{
+						continue;
+					}
+				}
+			}
+
+			// Mark as hit
+			HitActors.Add(HitActor);
+
+			// Calculate impulse
+			FVector ImpactPoint = EnemyLoc;
+			FVector ImpactNormal = -PlayerToEnemy;
+			if (!PlayerToEnemy.IsNearlyZero())
+			{
+				ImpactNormal.Normalize();
+			}
+
+			// knock upwards and away from the impact normal
+			const FVector Impulse = (ImpactNormal * -MeleeKnockbackImpulse) + (FVector::UpVector * MeleeLaunchImpulse);
+
+			// pass the damage event to the actor
+			Damageable->ApplyDamage(MeleeDamage, this, ImpactPoint, Impulse);
+
+			// call the BP handler to play effects, etc.
+			DealtDamage(MeleeDamage, ImpactPoint);
 		}
 	}
 }
